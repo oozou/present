@@ -124,8 +124,8 @@ final class SceneRenderer {
         if spec.showBezel {
             let landscape = spec.streamSize.width > spec.streamSize.height
             if let chrome = spec.chrome,
-               let chromeImg = rasterize(
-                    chrome.composite, pixelSize: geo.outerRect.size, rotated90: landscape) {
+               let chromeImg = chrome.frameImage(
+                    pixelSize: geo.outerRect.size, rotated90: landscape) {
                 // soft drop shadow behind the phone
                 ctx.saveGState()
                 ctx.setShadow(
