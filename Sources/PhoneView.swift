@@ -189,7 +189,11 @@ struct PhoneView: View {
                     .frame(width: island.width * scaleX, height: island.height * scaleY)
                     .offset(x: island.minX * scaleX, y: island.minY * scaleY)
                     .opacity(calibrating || !capture.streamShowsIsland ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.15), value: capture.streamShowsIsland)
+                    // Reappear fast (the stream's island vanishes abruptly);
+                    // hiding can be gentler — both are black while overlapping.
+                    .animation(
+                        .easeOut(duration: capture.streamShowsIsland ? 0.2 : 0.08),
+                        value: capture.streamShowsIsland)
             }
             .allowsHitTesting(false)
         }

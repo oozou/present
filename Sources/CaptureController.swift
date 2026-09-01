@@ -47,7 +47,6 @@ final class CaptureController: NSObject, ObservableObject {
     /// app fills in a black pill). Sampled from incoming frames.
     @Published private(set) var streamShowsIsland = false
     nonisolated(unsafe) private var _islandInStream = false
-    nonisolated(unsafe) private var frameCounter = 0
     nonisolated(unsafe) private var pendingIslandResult: (value: Bool, streak: Int) = (false, 0)
     nonisolated var islandOverlayNeededNow: Bool {
         latestFrameLock.lock()
@@ -279,10 +278,9 @@ extension CaptureController: AVCaptureVideoDataOutputSampleBufferDelegate {
             _latestFrame = buffer
             latestFrameLock.unlock()
 
-            frameCounter += 1
-            if frameCounter % 15 == 0 {
-                analyzeIslandRegion(buffer)
-            }
+            // Every frame — the scan touches ~600 pixels, so it's effectively
+            // free, and per-frame detection keeps the overlay handoff seamless.
+            analyzeIslandRegion(buffer)
         }
         media.ingest(sampleBuffer)
     }
@@ -320,13 +318,13 @@ extension CaptureController: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard total > 0 else { return }
         let showsIsland = Double(dark) / Double(total) > 0.7
 
-        // Hysteresis: flip only after two consecutive agreeing samples.
+        // Hysteresis: flip only after three consecutive agreeing frames (~50ms).
         if pendingIslandResult.value == showsIsland {
             pendingIslandResult.streak += 1
         } else {
             pendingIslandResult = (showsIsland, 1)
         }
-        guard pendingIslandResult.streak >= 2 else { return }
+        guard pendingIslandResult.streak >= 3 else { return }
 
         latestFrameLock.lock()
         let changed = _islandInStream != showsIsland
