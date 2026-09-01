@@ -14,6 +14,7 @@ final class MediaExporter: ObservableObject {
 
     // Recording state, guarded by `lock` (written from main, read from capture queue).
     private var renderer: SceneRenderer?
+    private var islandOverlayActive: () -> Bool = { false }
     private var writer: AVAssetWriter?
     private var writerInput: AVAssetWriterInput?
     private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
@@ -27,17 +28,33 @@ final class MediaExporter: ObservableObject {
         return f
     }()
 
+    /// The system screenshot folder (what Screenshot.app configures via
+    /// `com.apple.screencapture location`), falling back to the Desktop —
+    /// the same rule macOS itself uses.
+    private static var captureDirectory: URL {
+        if let value = CFPreferencesCopyAppValue(
+            "location" as CFString, "com.apple.screencapture" as CFString) as? String {
+            let path = (value as NSString).expandingTildeInPath
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+                return URL(fileURLWithPath: path, isDirectory: true)
+            }
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop", isDirectory: true)
+    }
+
     // MARK: - Screenshot
 
-    func saveScreenshot(spec: SceneSpec, frame: CVPixelBuffer) {
+    func saveScreenshot(spec: SceneSpec, frame: CVPixelBuffer, overlayIsland: Bool) {
         guard let renderer = SceneRenderer(spec: spec, ciContext: ciContext),
-              let cgImage = renderer.composeCGImage(frame)
+              let cgImage = renderer.composeCGImage(frame, overlayIsland: overlayIsland)
         else {
             showToast("Screenshot failed")
             return
         }
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Pictures/Present \(Self.timestamp.string(from: Date())).png")
+        let dir = Self.captureDirectory
+        let url = dir.appendingPathComponent("Present \(Self.timestamp.string(from: Date())).png")
         let rep = NSBitmapImageRep(cgImage: cgImage)
         guard let data = rep.representation(using: .png, properties: [:]) else {
             showToast("Screenshot failed")
@@ -46,7 +63,7 @@ final class MediaExporter: ObservableObject {
         do {
             try data.write(to: url)
             Log.write("screenshot saved: \(url.path)")
-            showToast("Screenshot saved to Pictures")
+            showToast("Screenshot saved to \(dir.lastPathComponent)")
         } catch {
             Log.write("screenshot write failed: \(error)")
             showToast("Screenshot failed")
@@ -55,15 +72,15 @@ final class MediaExporter: ObservableObject {
 
     // MARK: - Recording
 
-    func startRecording(spec: SceneSpec) {
+    func startRecording(spec: SceneSpec, islandOverlayActive: @escaping () -> Bool) {
         guard !isRecording else { return }
         guard let renderer = SceneRenderer(spec: spec, ciContext: ciContext) else {
             showToast("Recording failed to start")
             return
         }
         let size = renderer.geometry.canvas
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Movies/Present \(Self.timestamp.string(from: Date())).mov")
+        let url = Self.captureDirectory
+            .appendingPathComponent("Present \(Self.timestamp.string(from: Date())).mov")
         do {
             let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
             let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -95,6 +112,7 @@ final class MediaExporter: ObservableObject {
 
             lock.lock()
             self.renderer = renderer
+            self.islandOverlayActive = islandOverlayActive
             self.writer = writer
             self.writerInput = input
             self.adaptor = adaptor
@@ -120,6 +138,7 @@ final class MediaExporter: ObservableObject {
         let input = self.writerInput
         let url = self.recordingURL
         self.renderer = nil
+        self.islandOverlayActive = { false }
         self.writer = nil
         self.writerInput = nil
         self.adaptor = nil
@@ -131,7 +150,8 @@ final class MediaExporter: ObservableObject {
             Task { @MainActor in
                 if writer?.status == .completed {
                     Log.write("recording saved: \(url?.path ?? "?")")
-                    self.showToast("Recording saved to Movies")
+                    let folder = url?.deletingLastPathComponent().lastPathComponent ?? "capture folder"
+                    self.showToast("Recording saved to \(folder)")
                 } else {
                     Log.write("recording failed: \(String(describing: writer?.error))")
                     self.showToast("Recording failed")
@@ -167,7 +187,7 @@ final class MediaExporter: ObservableObject {
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &target)
         }
         if let target {
-            renderer.render(frame, to: target)
+            renderer.render(frame, to: target, overlayIsland: islandOverlayActive())
             adaptor.append(target, withPresentationTime: pts)
         }
         lock.unlock()

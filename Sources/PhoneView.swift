@@ -153,8 +153,45 @@ struct PhoneView: View {
     private var screen: some View {
         if capture.isStreaming {
             PreviewView(session: capture.session)
+                .overlay(islandOverlay)
         } else {
             placeholder
+        }
+    }
+
+    // Declared so SwiftUI re-renders live while the island is calibrated
+    // with the ⌥-arrow shortcuts (the values feed DynamicIsland.rect).
+    @AppStorage("islandY") private var islandY = 41.0
+    @AppStorage("islandHeight") private var islandHeight = 111.0
+    @AppStorage("islandWidth") private var islandWidth = 378.0
+    @AppStorage("islandMode") private var islandMode = "auto"
+
+    /// Idle mirror streams omit the Dynamic Island, so a black pill is drawn
+    /// in. It fades out whenever the stream renders the island itself (an
+    /// animation or Live Activity), detected by sampling the frames.
+    @ViewBuilder
+    private var islandOverlay: some View {
+        let _ = (islandY, islandHeight, islandWidth)
+        if islandMode != "off", let island = DynamicIsland.rect(streamSize: screenAspect) {
+            let calibrating = islandMode == "always"
+            GeometryReader { geo in
+                let scaleX = geo.size.width / screenAspect.width
+                let scaleY = geo.size.height / screenAspect.height
+                Capsule()
+                    // Calibration mode: translucent red diff so the pill can
+                    // be compared against the stream's own island underneath.
+                    .fill(calibrating ? Color.red.opacity(0.4) : Color.black)
+                    .overlay {
+                        if calibrating {
+                            Capsule().strokeBorder(Color.red, lineWidth: 1)
+                        }
+                    }
+                    .frame(width: island.width * scaleX, height: island.height * scaleY)
+                    .offset(x: island.minX * scaleX, y: island.minY * scaleY)
+                    .opacity(calibrating || !capture.streamShowsIsland ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: capture.streamShowsIsland)
+            }
+            .allowsHitTesting(false)
         }
     }
 

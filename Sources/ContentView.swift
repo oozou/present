@@ -12,6 +12,14 @@ struct ContentView: View {
     @AppStorage("phonePadding") private var phonePadding = 48.0
 
     @State private var barVisible = false
+    @State private var flash = 0.0
+
+    // Live island calibration (⌥-arrows); shared with detection and exports.
+    @AppStorage("islandY") private var islandY = 41.0
+    @AppStorage("islandHeight") private var islandHeight = 111.0
+    @AppStorage("islandWidth") private var islandWidth = 378.0
+    @State private var calibrationReadout: String?
+    @State private var readoutFadeTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { geo in
@@ -25,6 +33,12 @@ struct ContentView: View {
                     .padding(phonePadding)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+                // Shutter flash for screenshots / recording start.
+                Color.white
+                    .opacity(flash)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+
                 VStack(spacing: 8) {
                     ToastView(media: capture.media)
                     ControlBar(
@@ -35,13 +49,26 @@ struct ContentView: View {
                         frameMode: $frameMode,
                         modelOverride: $modelOverride,
                         phonePadding: $phonePadding,
-                        makeSpec: sceneSpec)
+                        makeSpec: sceneSpec,
+                        triggerFlash: triggerFlash)
                         .opacity(barVisible ? 1 : 0)
                         .offset(y: barVisible ? 0 : 24)
                         .allowsHitTesting(barVisible)
                 }
                 .padding(.bottom, 14)
             }
+            .overlay(alignment: .top) {
+                if let calibrationReadout {
+                    Text(calibrationReadout)
+                        .font(.callout.monospaced())
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.top, 16)
+                        .transition(.opacity)
+                }
+            }
+            .background(calibrationShortcuts)
             // Dock-style reveal: only when the cursor is near the bottom edge.
             .onContinuousHover { phase in
                 let visible: Bool
@@ -55,6 +82,49 @@ struct ContentView: View {
                     withAnimation(.easeOut(duration: 0.18)) { barVisible = visible }
                 }
             }
+        }
+    }
+
+    /// ⌥↑/⌥↓ move the island, ⌥⇧↑/⌥⇧↓ change its height, ⌥←/⌥→ its width.
+    private var calibrationShortcuts: some View {
+        Group {
+            Button("") { adjustIsland(dy: -1) }
+                .keyboardShortcut(.upArrow, modifiers: .option)
+            Button("") { adjustIsland(dy: 1) }
+                .keyboardShortcut(.downArrow, modifiers: .option)
+            Button("") { adjustIsland(dh: -1) }
+                .keyboardShortcut(.upArrow, modifiers: [.option, .shift])
+            Button("") { adjustIsland(dh: 1) }
+                .keyboardShortcut(.downArrow, modifiers: [.option, .shift])
+            Button("") { adjustIsland(dw: -2) }
+                .keyboardShortcut(.leftArrow, modifiers: .option)
+            Button("") { adjustIsland(dw: 2) }
+                .keyboardShortcut(.rightArrow, modifiers: .option)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+    }
+
+    private func adjustIsland(dy: Double = 0, dh: Double = 0, dw: Double = 0) {
+        islandY += dy
+        islandHeight = max(10, islandHeight + dh)
+        islandWidth = max(20, islandWidth + dw)
+        withAnimation(.easeIn(duration: 0.1)) {
+            calibrationReadout =
+                "island  y \(Int(islandY)) · h \(Int(islandHeight)) · w \(Int(islandWidth))"
+        }
+        readoutFadeTask?.cancel()
+        readoutFadeTask = Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) { calibrationReadout = nil }
+        }
+    }
+
+    private func triggerFlash() {
+        flash = 0.85
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.45)) { flash = 0 }
         }
     }
 
@@ -101,8 +171,10 @@ private struct ControlBar: View {
     @Binding var modelOverride: String
     @Binding var phonePadding: Double
     let makeSpec: () -> SceneSpec?
+    let triggerFlash: () -> Void
 
     @State private var showingImagePicker = false
+    @AppStorage("islandMode") private var islandMode = "auto"
 
     var body: some View {
         HStack(spacing: 14) {
@@ -120,6 +192,13 @@ private struct ControlBar: View {
                 Picker("Frame style", selection: $frameMode) {
                     Text("Photoreal (Simulator art)").tag("photoreal")
                     Text("Stylized (drawn)").tag("drawn")
+                }
+                .pickerStyle(.inline)
+
+                Picker("Dynamic Island", selection: $islandMode) {
+                    Text("Fill when idle").tag("auto")
+                    Text("Always (calibrate)").tag("always")
+                    Text("Off").tag("off")
                 }
                 .pickerStyle(.inline)
 
@@ -161,6 +240,7 @@ private struct ControlBar: View {
             Button(action: toggleRecording) {
                 Image(systemName: media.isRecording ? "stop.circle.fill" : "record.circle")
                     .foregroundStyle(media.isRecording ? Color.red : Color.primary)
+                    .symbolEffect(.pulse, options: .repeating, isActive: media.isRecording)
             }
             .buttonStyle(.plain)
             .disabled(!capture.isStreaming)
@@ -218,14 +298,21 @@ private struct ControlBar: View {
 
     private func takeScreenshot() {
         guard let spec = makeSpec(), let frame = capture.latestFrame else { return }
-        media.saveScreenshot(spec: spec, frame: frame)
+        triggerFlash()
+        media.saveScreenshot(
+            spec: spec, frame: frame,
+            overlayIsland: DynamicIsland.mode != "off" && capture.islandOverlayNeededNow)
     }
 
     private func toggleRecording() {
         if media.isRecording {
             media.stopRecording()
         } else if let spec = makeSpec() {
-            media.startRecording(spec: spec)
+            triggerFlash()
+            let capture = self.capture
+            media.startRecording(spec: spec) {
+                DynamicIsland.mode != "off" && capture.islandOverlayNeededNow
+            }
         }
     }
 

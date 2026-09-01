@@ -25,10 +25,16 @@ made for sharing the window in calls (Google Meet, Zoom, …).
   are installed.
 - **Automatic model detection** — the connected iPhone's hardware identifier
   (e.g. `iPhone18,2`) picks the right frame; manual override available.
+- **Adaptive Dynamic Island** — idle mirror streams omit the island, so the
+  app fills in a black pill; it fades out automatically whenever the stream
+  renders the island itself (animations, Live Activities), detected by
+  sampling frames. Position is calibratable in-app (⌥-arrows) and the fill
+  can be toggled off.
 - **Backgrounds** — gradient presets or your own image.
 - **Screenshots & recordings** — composed at the stream's native resolution
-  (background + frame + video), not a window grab. PNG to `~/Pictures` (⌘S),
-  H.264 `.mov` to `~/Movies` (⌘R).
+  (background + frame + video), not a window grab. PNG (⌘S) and H.264 `.mov`
+  (⌘R), saved to your system screenshot folder (the location set in
+  Screenshot.app, Desktop by default).
 - **Clean window for sharing** — hidden title bar; controls only appear when
   the mouse reaches the bottom edge, Dock-style. Portrait and landscape both
   supported.
@@ -71,8 +77,8 @@ Move the mouse to the bottom edge of the window to reveal the control bar:
 | Status light | Connected device and detected model |
 | iPhone button | Toggle the device frame on/off |
 | Sliders menu | Frame style (photoreal/stylized), device model override, phone size |
-| Camera button (⌘S) | Save a composed screenshot to `~/Pictures` |
-| Record button (⌘R) | Record a composed H.264 movie to `~/Movies` |
+| Camera button (⌘S) | Save a composed screenshot to the system screenshot folder |
+| Record button (⌘R) | Record a composed H.264 movie to the system screenshot folder |
 | Color dots | Background gradient presets |
 | Photo button | Pick a background image |
 

@@ -42,6 +42,19 @@ final class CaptureController: NSObject, ObservableObject {
         return _latestFrame
     }
 
+    /// Whether the stream itself currently renders the Dynamic Island (it
+    /// only does while the island is active — idle mirrors omit it, so the
+    /// app fills in a black pill). Sampled from incoming frames.
+    @Published private(set) var streamShowsIsland = false
+    nonisolated(unsafe) private var _islandInStream = false
+    nonisolated(unsafe) private var frameCounter = 0
+    nonisolated(unsafe) private var pendingIslandResult: (value: Bool, streak: Int) = (false, 0)
+    nonisolated var islandOverlayNeededNow: Bool {
+        latestFrameLock.lock()
+        defer { latestFrameLock.unlock() }
+        return !_islandInStream
+    }
+
     var isStreaming: Bool {
         if case .streaming = status { return true }
         return false
@@ -265,7 +278,92 @@ extension CaptureController: AVCaptureVideoDataOutputSampleBufferDelegate {
             latestFrameLock.lock()
             _latestFrame = buffer
             latestFrameLock.unlock()
+
+            frameCounter += 1
+            if frameCounter % 15 == 0 {
+                analyzeIslandRegion(buffer)
+            }
         }
         media.ingest(sampleBuffer)
+    }
+
+    /// Checks whether the island region of the frame is predominantly black
+    /// (= the stream is rendering the island itself). Runs on the frame queue;
+    /// samples ~600 pixels, so it's effectively free.
+    private nonisolated func analyzeIslandRegion(_ buffer: CVPixelBuffer) {
+        let w = CVPixelBufferGetWidth(buffer)
+        let h = CVPixelBufferGetHeight(buffer)
+        guard h > w, // portrait only
+              let island = DynamicIsland.rect(streamSize: CGSize(width: w, height: h))
+        else { return }
+
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        let ptr = base.assumingMemoryBound(to: UInt8.self)
+
+        // Sample the pill's core (inset to avoid anti-aliased edges).
+        let core = island.insetBy(dx: island.width * 0.15, dy: island.height * 0.15)
+        var dark = 0, total = 0
+        var y = Int(core.minY)
+        while y < Int(core.maxY) {
+            var x = Int(core.minX)
+            while x < Int(core.maxX) {
+                let p = ptr + y * bytesPerRow + x * 4 // BGRA
+                if p[0] < 30, p[1] < 30, p[2] < 30 { dark += 1 }
+                total += 1
+                x += 8
+            }
+            y += 8
+        }
+        guard total > 0 else { return }
+        let showsIsland = Double(dark) / Double(total) > 0.7
+
+        // Hysteresis: flip only after two consecutive agreeing samples.
+        if pendingIslandResult.value == showsIsland {
+            pendingIslandResult.streak += 1
+        } else {
+            pendingIslandResult = (showsIsland, 1)
+        }
+        guard pendingIslandResult.streak >= 2 else { return }
+
+        latestFrameLock.lock()
+        let changed = _islandInStream != showsIsland
+        _islandInStream = showsIsland
+        latestFrameLock.unlock()
+        if changed {
+            Task { @MainActor in self.streamShowsIsland = showsIsland }
+        }
+    }
+}
+
+/// Geometry of the Dynamic Island in stream pixels. All island iPhones are
+/// 3x devices with the same island size in points (~126×37pt, 11pt from the
+/// top), so pixel dimensions are constant.
+enum DynamicIsland {
+    /// "auto" fills the island when the stream omits it, "always" draws the
+    /// pill unconditionally (calibration aid), "off" never draws it.
+    static var mode: String {
+        UserDefaults.standard.string(forKey: "islandMode") ?? "auto"
+    }
+
+    // Calibratable via ⌥-arrow shortcuts in the app; persisted in defaults.
+    static var width: CGFloat { stored("islandWidth", default: 378) }
+    static var height: CGFloat { stored("islandHeight", default: 111) }
+    static var top: CGFloat { stored("islandY", default: 41) }
+
+    private static func stored(_ key: String, default value: Double) -> CGFloat {
+        CGFloat(UserDefaults.standard.object(forKey: key) as? Double ?? value)
+    }
+
+    /// Portrait-stream island rect (top-based y), or nil for non-island models.
+    static func rect(streamSize: CGSize) -> CGRect? {
+        guard PhoneModel.infer(from: streamSize).bezel == .dynamicIsland,
+              streamSize.height > streamSize.width
+        else { return nil }
+        return CGRect(
+            x: (streamSize.width - width) / 2, y: top,
+            width: width, height: height)
     }
 }

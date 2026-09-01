@@ -70,6 +70,7 @@ final class SceneRenderer {
     let geometry: SceneGeometry
     private let baseImage: CIImage   // background + frame
     private let maskImage: CIImage   // white where video shows through
+    private let islandImage: CIImage? // black pill, canvas-positioned
     private let videoTransform: CGAffineTransform
     private let ciContext: CIContext
 
@@ -82,28 +83,52 @@ final class SceneRenderer {
         else { return nil }
         baseImage = CIImage(cgImage: base)
         maskImage = CIImage(cgImage: mask)
+        islandImage = Self.renderIsland(spec: spec, geo: geo).map(CIImage.init)
         videoTransform = CGAffineTransform(
             translationX: geo.screenRect.minX, y: geo.screenRect.minY)
     }
 
-    /// Composes one video frame over the base scene. Returns nil on failure.
-    func compose(_ videoFrame: CVPixelBuffer) -> CIImage? {
+    /// Composes one video frame over the base scene. `overlayIsland` draws
+    /// the black island pill (used while the stream doesn't render its own).
+    func compose(_ videoFrame: CVPixelBuffer, overlayIsland: Bool) -> CIImage? {
         let video = CIImage(cvPixelBuffer: videoFrame).transformed(by: videoTransform)
         guard let filter = CIFilter(name: "CIBlendWithMask") else { return nil }
         filter.setValue(video, forKey: kCIInputImageKey)
         filter.setValue(baseImage, forKey: kCIInputBackgroundImageKey)
         filter.setValue(maskImage, forKey: kCIInputMaskImageKey)
-        return filter.outputImage?.cropped(to: CGRect(origin: .zero, size: geometry.canvas))
+        var output = filter.outputImage
+        if overlayIsland, let islandImage, let composed = output {
+            output = islandImage.composited(over: composed)
+        }
+        return output?.cropped(to: CGRect(origin: .zero, size: geometry.canvas))
     }
 
-    func composeCGImage(_ videoFrame: CVPixelBuffer) -> CGImage? {
-        guard let output = compose(videoFrame) else { return nil }
+    func composeCGImage(_ videoFrame: CVPixelBuffer, overlayIsland: Bool) -> CGImage? {
+        guard let output = compose(videoFrame, overlayIsland: overlayIsland) else { return nil }
         return ciContext.createCGImage(output, from: CGRect(origin: .zero, size: geometry.canvas))
     }
 
-    func render(_ videoFrame: CVPixelBuffer, to target: CVPixelBuffer) {
-        guard let output = compose(videoFrame) else { return }
+    func render(_ videoFrame: CVPixelBuffer, to target: CVPixelBuffer, overlayIsland: Bool) {
+        guard let output = compose(videoFrame, overlayIsland: overlayIsland) else { return }
         ciContext.render(output, to: target)
+    }
+
+    /// Transparent canvas with just the black island pill over the screen.
+    private static func renderIsland(spec: SceneSpec, geo: SceneGeometry) -> CGImage? {
+        guard let island = DynamicIsland.rect(streamSize: spec.streamSize),
+              let ctx = makeContext(geo.canvas)
+        else { return nil }
+        // Convert top-based stream coords to bottom-left canvas coords.
+        let rect = CGRect(
+            x: geo.screenRect.minX + island.minX,
+            y: geo.screenRect.maxY - island.minY - island.height,
+            width: island.width, height: island.height)
+        ctx.addPath(CGPath(
+            roundedRect: rect, cornerWidth: rect.height / 2,
+            cornerHeight: rect.height / 2, transform: nil))
+        ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+        ctx.fillPath()
+        return ctx.makeImage()
     }
 
     // MARK: - Static layers
