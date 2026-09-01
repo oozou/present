@@ -18,8 +18,12 @@ final class CaptureController: NSObject, ObservableObject {
     @Published private(set) var deviceName: String?
     /// Pixel dimensions of the incoming stream (portrait or landscape).
     @Published private(set) var streamSize: CGSize?
+    /// Hardware identifier like "iPhone18,2", read from the phone's sibling
+    /// Continuity Camera device (the screen device only reports "iOS Device").
+    @Published private(set) var modelIdentifier: String?
 
     let session = AVCaptureSession()
+    let media = MediaExporter()
 
     private var device: AVCaptureDevice?
     private var formatObservation: NSKeyValueObservation?
@@ -27,6 +31,16 @@ final class CaptureController: NSObject, ObservableObject {
     private var discoveryObservation: NSKeyValueObservation?
     private var pollTimer: Timer?
     private let sessionQueue = DispatchQueue(label: "de.consti.present.capture")
+    private let frameQueue = DispatchQueue(label: "de.consti.present.frames")
+    private let videoOutput = AVCaptureVideoDataOutput()
+
+    private let latestFrameLock = NSLock()
+    nonisolated(unsafe) private var _latestFrame: CVPixelBuffer?
+    nonisolated var latestFrame: CVPixelBuffer? {
+        latestFrameLock.lock()
+        defer { latestFrameLock.unlock() }
+        return _latestFrame
+    }
 
     var isStreaming: Bool {
         if case .streaming = status { return true }
@@ -112,9 +126,21 @@ final class CaptureController: NSObject, ObservableObject {
     }
 
     private func attachIfPossible() {
+        updateModelIdentifier()
         guard device == nil, let discovery else { return }
         if let phone = discovery.devices.first(where: Self.isIPhoneScreenDevice) {
             attach(phone)
+        }
+    }
+
+    private func updateModelIdentifier() {
+        let sibling = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.external, .continuityCamera], mediaType: .video,
+            position: .unspecified
+        ).devices.first { $0.modelID.hasPrefix("iPhone") }
+        if modelIdentifier != sibling?.modelID {
+            modelIdentifier = sibling?.modelID
+            Log.write("model identifier -> \(sibling?.modelID ?? "unknown")")
         }
     }
 
@@ -162,6 +188,8 @@ final class CaptureController: NSObject, ObservableObject {
         }
 
         let session = self.session
+        let videoOutput = self.videoOutput
+        let frameQueue = self.frameQueue
         sessionQueue.async {
             var failure: String?
             session.beginConfiguration()
@@ -175,6 +203,19 @@ final class CaptureController: NSObject, ObservableObject {
                 }
             } catch {
                 failure = "AVCaptureDeviceInput failed: \(error.localizedDescription)"
+            }
+            // Frame tap for screenshots/recording; BGRA for direct CoreImage use.
+            if session.outputs.isEmpty {
+                videoOutput.videoSettings = [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                ]
+                videoOutput.alwaysDiscardsLateVideoFrames = true
+                videoOutput.setSampleBufferDelegate(self, queue: frameQueue)
+                if session.canAddOutput(videoOutput) {
+                    session.addOutput(videoOutput)
+                } else {
+                    Log.write("frame tap: canAddOutput returned false")
+                }
             }
             session.commitConfiguration()
 
@@ -200,8 +241,10 @@ final class CaptureController: NSObject, ObservableObject {
         device = nil
         deviceName = nil
         streamSize = nil
+        modelIdentifier = nil
         formatObservation = nil
         status = .waitingForDevice
+        media.stopRecording()
 
         let session = self.session
         sessionQueue.async {
@@ -209,5 +252,20 @@ final class CaptureController: NSObject, ObservableObject {
             session.inputs.forEach(session.removeInput)
             session.commitConfiguration()
         }
+    }
+}
+
+extension CaptureController: AVCaptureVideoDataOutputSampleBufferDelegate {
+    nonisolated func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        if let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+            latestFrameLock.lock()
+            _latestFrame = buffer
+            latestFrameLock.unlock()
+        }
+        media.ingest(sampleBuffer)
     }
 }

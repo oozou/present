@@ -7,42 +7,104 @@ struct ContentView: View {
     @AppStorage("backgroundPreset") private var backgroundPreset = 0
     @AppStorage("backgroundImagePath") private var backgroundImagePath = ""
     @AppStorage("showBezel") private var showBezel = true
-    @AppStorage("bezelOverride") private var bezelOverrideRaw = "" // "" = auto
+    @AppStorage("frameMode") private var frameMode = "photoreal" // photoreal | drawn
+    @AppStorage("modelOverride") private var modelOverride = "" // "" = auto
     @AppStorage("phonePadding") private var phonePadding = 48.0
 
-    @State private var hovering = false
-    @State private var showingImagePicker = false
-
-    private var bezelOverride: BezelStyle? {
-        BezelStyle(rawValue: bezelOverrideRaw)
-    }
+    @State private var barVisible = false
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            BackgroundView(presetID: backgroundPreset, imagePath: backgroundImagePath)
+        GeometryReader { geo in
+            ZStack(alignment: .bottom) {
+                BackgroundView(presetID: backgroundPreset, imagePath: backgroundImagePath)
 
-            PhoneView(showBezel: showBezel, bezelOverride: bezelOverride)
-                .padding(phonePadding)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                PhoneView(
+                    showBezel: showBezel,
+                    useChrome: frameMode == "photoreal",
+                    modelOverride: modelOverride)
+                    .padding(phonePadding)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            controlBar
-                .opacity(hovering ? 1 : 0)
-                .animation(.easeInOut(duration: 0.2), value: hovering)
+                VStack(spacing: 8) {
+                    ToastView(media: capture.media)
+                    ControlBar(
+                        media: capture.media,
+                        backgroundPreset: $backgroundPreset,
+                        backgroundImagePath: $backgroundImagePath,
+                        showBezel: $showBezel,
+                        frameMode: $frameMode,
+                        modelOverride: $modelOverride,
+                        phonePadding: $phonePadding,
+                        makeSpec: sceneSpec)
+                        .opacity(barVisible ? 1 : 0)
+                        .offset(y: barVisible ? 0 : 24)
+                        .allowsHitTesting(barVisible)
+                }
                 .padding(.bottom, 14)
-        }
-        .onHover { hovering = $0 }
-        .fileImporter(
-            isPresented: $showingImagePicker,
-            allowedContentTypes: [.image]
-        ) { result in
-            if case .success(let url) = result {
-                backgroundImagePath = url.path
-                backgroundPreset = -1
+            }
+            // Dock-style reveal: only when the cursor is near the bottom edge.
+            .onContinuousHover { phase in
+                let visible: Bool
+                switch phase {
+                case .active(let point):
+                    visible = point.y > geo.size.height - 70
+                case .ended:
+                    visible = false
+                }
+                if visible != barVisible {
+                    withAnimation(.easeOut(duration: 0.18)) { barVisible = visible }
+                }
             }
         }
     }
 
-    private var controlBar: some View {
+    private func sceneSpec() -> SceneSpec? {
+        guard let streamSize = capture.streamSize else { return nil }
+        let inferred = PhoneModel.infer(from: streamSize)
+        let identifier = modelOverride.isEmpty
+            ? (capture.modelIdentifier ?? inferred.identifier)
+            : modelOverride
+        return SceneSpec(
+            streamSize: streamSize,
+            chrome: showBezel && frameMode == "photoreal"
+                ? DeviceChrome.load(modelIdentifier: identifier) : nil,
+            fallbackStyle: inferred.bezel,
+            showBezel: showBezel,
+            backgroundPresetID: backgroundPreset,
+            backgroundImagePath: backgroundImagePath)
+    }
+}
+
+private struct ToastView: View {
+    @ObservedObject var media: MediaExporter
+
+    var body: some View {
+        if let toast = media.toast {
+            Text(toast)
+                .font(.callout)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .transition(.opacity)
+        }
+    }
+}
+
+private struct ControlBar: View {
+    @EnvironmentObject private var capture: CaptureController
+    @ObservedObject var media: MediaExporter
+
+    @Binding var backgroundPreset: Int
+    @Binding var backgroundImagePath: String
+    @Binding var showBezel: Bool
+    @Binding var frameMode: String
+    @Binding var modelOverride: String
+    @Binding var phonePadding: Double
+    let makeSpec: () -> SceneSpec?
+
+    @State private var showingImagePicker = false
+
+    var body: some View {
         HStack(spacing: 14) {
             deviceStatus
 
@@ -55,10 +117,18 @@ struct ContentView: View {
             .help("Show device frame")
 
             Menu {
-                Picker("Frame style", selection: $bezelOverrideRaw) {
+                Picker("Frame style", selection: $frameMode) {
+                    Text("Photoreal (Simulator art)").tag("photoreal")
+                    Text("Stylized (drawn)").tag("drawn")
+                }
+                .pickerStyle(.inline)
+
+                Divider()
+
+                Picker("Device", selection: $modelOverride) {
                     Text("Auto (detected)").tag("")
-                    ForEach(BezelStyle.allCases) { style in
-                        Text(style.rawValue).tag(style.rawValue)
+                    ForEach(PhoneModel.overrideChoices, id: \.identifier) { choice in
+                        Text(choice.name).tag(choice.identifier)
                     }
                 }
                 .pickerStyle(.inline)
@@ -76,7 +146,26 @@ struct ContentView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Frame style and size")
+            .help("Device model and size")
+
+            Divider().frame(height: 18)
+
+            Button(action: takeScreenshot) {
+                Image(systemName: "camera")
+            }
+            .buttonStyle(.plain)
+            .disabled(!capture.isStreaming)
+            .keyboardShortcut("s", modifiers: .command)
+            .help("Save a screenshot to Pictures (⌘S)")
+
+            Button(action: toggleRecording) {
+                Image(systemName: media.isRecording ? "stop.circle.fill" : "record.circle")
+                    .foregroundStyle(media.isRecording ? Color.red : Color.primary)
+            }
+            .buttonStyle(.plain)
+            .disabled(!capture.isStreaming)
+            .keyboardShortcut("r", modifiers: .command)
+            .help(media.isRecording ? "Stop recording (⌘R)" : "Record to Movies (⌘R)")
 
             Divider().frame(height: 18)
 
@@ -116,6 +205,28 @@ struct ContentView: View {
         .padding(.vertical, 9)
         .background(.ultraThinMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+        .fileImporter(
+            isPresented: $showingImagePicker,
+            allowedContentTypes: [.image]
+        ) { result in
+            if case .success(let url) = result {
+                backgroundImagePath = url.path
+                backgroundPreset = -1
+            }
+        }
+    }
+
+    private func takeScreenshot() {
+        guard let spec = makeSpec(), let frame = capture.latestFrame else { return }
+        media.saveScreenshot(spec: spec, frame: frame)
+    }
+
+    private func toggleRecording() {
+        if media.isRecording {
+            media.stopRecording()
+        } else if let spec = makeSpec() {
+            media.startRecording(spec: spec)
+        }
     }
 
     private var deviceStatus: some View {
@@ -132,11 +243,11 @@ struct ContentView: View {
     private var statusText: String {
         switch capture.status {
         case .streaming:
-            let model = PhoneModel.infer(from: capture.streamSize)
-            if let name = capture.deviceName {
-                return "\(name) · \(model.name)"
+            let name = capture.deviceName ?? "iPhone"
+            if let model = capture.modelIdentifier {
+                return "\(name) · \(model)"
             }
-            return model.name
+            return "\(name) · \(PhoneModel.infer(from: capture.streamSize).name)"
         case .accessDenied:
             return "Camera access denied"
         case .error:

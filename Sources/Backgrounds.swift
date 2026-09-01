@@ -3,36 +3,24 @@ import SwiftUI
 struct BackgroundPreset: Identifiable {
     let id: Int
     let name: String
-    let colors: [Color]
+    let rgb: [(Double, Double, Double)]
+
+    var colors: [Color] { rgb.map { Color(red: $0.0, green: $0.1, blue: $0.2) } }
+    var cgColors: [CGColor] { rgb.map { CGColor(red: $0.0, green: $0.1, blue: $0.2, alpha: 1) } }
 
     static let all: [BackgroundPreset] = [
-        .init(id: 0, name: "Aurora", colors: [
-            Color(red: 0.35, green: 0.20, blue: 0.65),
-            Color(red: 0.10, green: 0.35, blue: 0.70),
-            Color(red: 0.75, green: 0.30, blue: 0.55),
-        ]),
-        .init(id: 1, name: "Ocean", colors: [
-            Color(red: 0.05, green: 0.25, blue: 0.45),
-            Color(red: 0.05, green: 0.55, blue: 0.60),
-        ]),
-        .init(id: 2, name: "Sunset", colors: [
-            Color(red: 0.95, green: 0.45, blue: 0.25),
-            Color(red: 0.85, green: 0.25, blue: 0.50),
-        ]),
-        .init(id: 3, name: "Meadow", colors: [
-            Color(red: 0.10, green: 0.45, blue: 0.30),
-            Color(red: 0.30, green: 0.70, blue: 0.55),
-        ]),
-        .init(id: 4, name: "Graphite", colors: [
-            Color(white: 0.28),
-            Color(white: 0.10),
-        ]),
-        .init(id: 5, name: "Black", colors: [.black, .black]),
-        .init(id: 6, name: "White", colors: [
-            Color(white: 1.0),
-            Color(white: 0.88),
-        ]),
+        .init(id: 0, name: "Aurora", rgb: [(0.35, 0.20, 0.65), (0.10, 0.35, 0.70), (0.75, 0.30, 0.55)]),
+        .init(id: 1, name: "Ocean", rgb: [(0.05, 0.25, 0.45), (0.05, 0.55, 0.60)]),
+        .init(id: 2, name: "Sunset", rgb: [(0.95, 0.45, 0.25), (0.85, 0.25, 0.50)]),
+        .init(id: 3, name: "Meadow", rgb: [(0.10, 0.45, 0.30), (0.30, 0.70, 0.55)]),
+        .init(id: 4, name: "Graphite", rgb: [(0.28, 0.28, 0.28), (0.10, 0.10, 0.10)]),
+        .init(id: 5, name: "Black", rgb: [(0, 0, 0), (0, 0, 0)]),
+        .init(id: 6, name: "White", rgb: [(1.0, 1.0, 1.0), (0.88, 0.88, 0.88)]),
     ]
+
+    static func preset(_ id: Int) -> BackgroundPreset {
+        all.first { $0.id == id } ?? all[0]
+    }
 }
 
 /// Renders the chosen background: a gradient preset, or a user-picked image.
@@ -51,8 +39,9 @@ struct BackgroundView: View {
             }
             .ignoresSafeArea()
         } else {
-            let preset = BackgroundPreset.all.first { $0.id == presetID } ?? BackgroundPreset.all[0]
-            LinearGradient(colors: preset.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(
+                colors: BackgroundPreset.preset(presetID).colors,
+                startPoint: .topLeading, endPoint: .bottomTrailing)
                 .ignoresSafeArea()
         }
     }

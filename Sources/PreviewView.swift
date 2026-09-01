@@ -23,6 +23,15 @@ final class PreviewNSView: NSView {
         layer = previewLayer
     }
 
+    /// Without this the layer renders at 1x on Retina displays and the
+    /// stream looks soft.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        if let scale = window?.backingScaleFactor {
+            layer?.contentsScale = scale
+        }
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 }
