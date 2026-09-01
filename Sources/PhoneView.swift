@@ -9,7 +9,10 @@ struct PhoneView: View {
     let bezelOverride: BezelStyle?
 
     private var screenAspect: CGSize {
-        capture.streamSize ?? CGSize(width: 1179, height: 2556) // iPhone 15-class portrait
+        if let size = capture.streamSize, size.width > 0, size.height > 0 {
+            return size
+        }
+        return CGSize(width: 1179, height: 2556) // iPhone 15-class portrait
     }
 
     private var bezelStyle: BezelStyle {
@@ -43,7 +46,7 @@ struct PhoneView: View {
 
     @ViewBuilder
     private var screen: some View {
-        if capture.status == .streaming {
+        if capture.isStreaming {
             PreviewView(session: capture.session)
         } else {
             placeholder
@@ -59,14 +62,22 @@ struct PhoneView: View {
                 Image(systemName: "iphone.gen3")
                     .font(.system(size: 44, weight: .thin))
                     .foregroundStyle(.secondary)
-                if capture.status == .accessDenied {
+                switch capture.status {
+                case .accessDenied:
                     Text("Camera access denied")
                         .font(.headline)
                     Text("Enable it in System Settings → Privacy & Security → Camera, then relaunch.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                } else {
+                case .error(let message):
+                    Text("Couldn't start the stream")
+                        .font(.headline)
+                    Text(message)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                default:
                     Text("Connect your iPhone")
                         .font(.headline)
                     Text("Plug in via USB-C, unlock the phone,\nand tap “Trust” if asked.")

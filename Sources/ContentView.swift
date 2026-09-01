@@ -121,7 +121,7 @@ struct ContentView: View {
     private var deviceStatus: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(capture.status == .streaming ? Color.green : Color.orange)
+                .fill(capture.isStreaming ? Color.green : Color.orange)
                 .frame(width: 7, height: 7)
             Text(statusText)
                 .font(.callout)
@@ -133,9 +133,14 @@ struct ContentView: View {
         switch capture.status {
         case .streaming:
             let model = PhoneModel.infer(from: capture.streamSize)
-            return capture.deviceName ?? model.name
+            if let name = capture.deviceName {
+                return "\(name) · \(model.name)"
+            }
+            return model.name
         case .accessDenied:
             return "Camera access denied"
+        case .error:
+            return "Stream error"
         case .waitingForDevice:
             return "Waiting for iPhone…"
         }
