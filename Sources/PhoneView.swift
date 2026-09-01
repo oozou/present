@@ -60,9 +60,7 @@ struct PhoneView: View {
         let ph = landscape ? ow : oh
         let frameStack = ZStack(alignment: .topLeading) {
             ForEach(chrome.buttons) { button in
-                ChromeButtonView(
-                    button: button, scale: pw / chrome.compositeSize.width,
-                    outerWidth: chrome.compositeSize.width)
+                ChromeButtonView(button: button, scale: pw / chrome.compositeSize.width)
             }
             Image(nsImage: chrome.composite)
                 .resizable()
@@ -206,21 +204,18 @@ private struct ChromeButtonView: View {
     let button: ChromeButton
     /// Points-on-screen per composite point.
     let scale: CGFloat
-    /// Composite width in points.
-    let outerWidth: CGFloat
 
     @State private var pressed = false
 
     var body: some View {
         let w = button.size.width * scale
         let h = button.size.height * scale
-        let restMinX = button.minX(outerWidth: outerWidth, x: button.restX) * scale
-        let slide = (button.tuckedX - button.restX) * scale
+        let minX = (pressed ? button.tuckedMinX : button.restMinX) * scale
 
         Image(nsImage: pressed ? (button.imageDown ?? button.image) : button.image)
             .resizable()
             .frame(width: w, height: h)
-            .offset(x: restMinX + (pressed ? slide : 0), y: button.y * scale)
+            .offset(x: minX, y: button.y * scale)
             .animation(.easeOut(duration: 0.09), value: pressed)
             .gesture(
                 DragGesture(minimumDistance: 0)

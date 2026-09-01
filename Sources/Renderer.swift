@@ -123,16 +123,31 @@ final class SceneRenderer {
 
         if spec.showBezel {
             let landscape = spec.streamSize.width > spec.streamSize.height
+            // The frame image covers the padded size (buttons protrude beyond
+            // the composite), so expand the draw rect accordingly.
+            let padScaleW = (spec.chrome?.paddedSize.width ?? 1) / (spec.chrome?.compositeSize.width ?? 1)
+            let padScaleH = (spec.chrome?.paddedSize.height ?? 1) / (spec.chrome?.compositeSize.height ?? 1)
+            let expandedSize = landscape
+                ? CGSize(
+                    width: geo.outerRect.width * padScaleH,
+                    height: geo.outerRect.height * padScaleW)
+                : CGSize(
+                    width: geo.outerRect.width * padScaleW,
+                    height: geo.outerRect.height * padScaleH)
+            let expandedRect = CGRect(
+                x: geo.outerRect.midX - expandedSize.width / 2,
+                y: geo.outerRect.midY - expandedSize.height / 2,
+                width: expandedSize.width, height: expandedSize.height)
             if let chrome = spec.chrome,
                let chromeImg = chrome.frameImage(
-                    pixelSize: geo.outerRect.size, rotated90: landscape) {
+                    pixelSize: expandedRect.size, rotated90: landscape) {
                 // soft drop shadow behind the phone
                 ctx.saveGState()
                 ctx.setShadow(
                     offset: CGSize(width: 0, height: -geo.canvas.height * 0.01),
                     blur: min(geo.canvas.width, geo.canvas.height) * 0.05,
                     color: CGColor(gray: 0, alpha: 0.45))
-                ctx.draw(chromeImg, in: geo.outerRect)
+                ctx.draw(chromeImg, in: expandedRect)
                 ctx.restoreGState()
             } else {
                 drawFallbackBezel(spec: spec, geo: geo, in: ctx)

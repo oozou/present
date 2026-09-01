@@ -5,23 +5,19 @@ import AppKit
 /// the exact screen shape. Both are optional system resources — when they're
 /// missing (no Xcode/simulators installed) callers fall back to a drawn bezel.
 /// A physical side button from the chrome bundle (volume, power, action).
-/// Buttons are drawn *behind* the phone body; only the protruding sliver
-/// shows. `restX` is the slid-out position (like a real phone), `tuckedX`
-/// the pressed-in position.
+/// Buttons are drawn *behind* the phone body with a protruding sliver.
+/// chrome.json positions them in a space padded by `devicePadding` around the
+/// composite, so composite-relative x can be negative (sticking out).
+/// `restMinX` is the slid-out position (like a real phone), `tuckedMinX` the
+/// pressed-in position; both are leading-edge x relative to the composite.
 struct ChromeButton: Identifiable {
     let id: String
     let image: NSImage
     let imageDown: NSImage?
-    let size: CGSize // points
-    let anchorLeft: Bool
-    let y: CGFloat       // top-based offset in composite points
-    let restX: CGFloat   // chrome.json "rollover" x
-    let tuckedX: CGFloat // chrome.json "normal" x
-
-    /// Leading-edge x in composite points at a given slide position.
-    func minX(outerWidth: CGFloat, x: CGFloat) -> CGFloat {
-        anchorLeft ? x : outerWidth + x - size.width
-    }
+    let size: CGSize    // points
+    let y: CGFloat      // offset from composite top, points
+    let restMinX: CGFloat
+    let tuckedMinX: CGFloat
 }
 
 struct DeviceChrome {
@@ -30,6 +26,14 @@ struct DeviceChrome {
     let buttons: [ChromeButton]
     /// Composite media-box size in points.
     let compositeSize: CGSize
+    /// Simulator window padding around the composite (buttons protrude into it).
+    let padding: NSEdgeInsets
+
+    var paddedSize: CGSize {
+        CGSize(
+            width: compositeSize.width + padding.left + padding.right,
+            height: compositeSize.height + padding.top + padding.bottom)
+    }
 
     private static let deviceKitRoot = "/Library/Developer/DeviceKit"
     private static let profilesRoot = "/Library/Developer/CoreSimulator/Profiles/DeviceTypes"
@@ -99,14 +103,17 @@ struct DeviceChrome {
         if let maskUUID = maskMap[modelIdentifier] {
             mask = NSImage(contentsOfFile: "\(deviceKitRoot)/FramebufferMasks/\(maskUUID).pdf")
         }
-        let buttons = loadButtons(resources: resources)
+        let (buttons, padding) = loadButtons(
+            resources: resources, compositeSize: composite.size)
         Log.write("chrome: loaded \(shortName) for \(modelIdentifier) (mask: \(mask != nil), buttons: \(buttons.count))")
         return DeviceChrome(
             composite: composite, mask: mask, buttons: buttons,
-            compositeSize: composite.size)
+            compositeSize: composite.size, padding: padding)
     }
 
-    private static func loadButtons(resources: String) -> [ChromeButton] {
+    private static func loadButtons(
+        resources: String, compositeSize: CGSize
+    ) -> ([ChromeButton], NSEdgeInsets) {
         struct Point: Decodable { let x: CGFloat; let y: CGFloat }
         struct Offsets: Decodable { let normal: Point; let rollover: Point? }
         struct Input: Decodable {
@@ -117,13 +124,25 @@ struct DeviceChrome {
             let anchor: String?
             let offsets: Offsets?
         }
-        struct ChromeJSON: Decodable { let inputs: [Input]? }
+        struct Padding: Decodable {
+            let top: CGFloat?; let left: CGFloat?
+            let bottom: CGFloat?; let right: CGFloat?
+        }
+        struct Images: Decodable { let devicePadding: Padding? }
+        struct ChromeJSON: Decodable { let inputs: [Input]?; let images: Images? }
 
         guard let data = FileManager.default.contents(atPath: "\(resources)/chrome.json"),
               let json = try? JSONDecoder().decode(ChromeJSON.self, from: data)
-        else { return [] }
+        else { return ([], NSEdgeInsets()) }
 
-        return (json.inputs ?? []).compactMap { input in
+        let pad = json.images?.devicePadding
+        let padding = NSEdgeInsets(
+            top: pad?.top ?? 0, left: pad?.left ?? 0,
+            bottom: pad?.bottom ?? 0, right: pad?.right ?? 0)
+        // Padded-space width; button x offsets are measured in this space.
+        let paddedWidth = compositeSize.width + padding.left + padding.right
+
+        let buttons = (json.inputs ?? []).compactMap { input -> ChromeButton? in
             guard input.type == "button",
                   let anchor = input.anchor, anchor == "left" || anchor == "right",
                   let imageName = input.image,
@@ -134,36 +153,49 @@ struct DeviceChrome {
             let down = input.imageDown.flatMap {
                 NSImage(contentsOfFile: "\(resources)/\($0).pdf")
             }
+            // Convert padded-space x to composite-relative leading-edge x.
+            func minX(_ x: CGFloat) -> CGFloat {
+                anchor == "left"
+                    ? x - padding.left
+                    : paddedWidth + x - image.size.width - padding.left
+            }
+            let restX = offsets.rollover?.x ?? offsets.normal.x
             return ChromeButton(
                 id: input.name,
                 image: image,
                 imageDown: down,
                 size: image.size,
-                anchorLeft: anchor == "left",
-                y: offsets.normal.y,
-                restX: offsets.rollover?.x ?? offsets.normal.x,
-                tuckedX: offsets.normal.x)
+                y: offsets.normal.y - padding.top,
+                restMinX: minX(restX),
+                tuckedMinX: minX(offsets.normal.x))
         }
+        return (buttons, padding)
     }
 }
 
 extension DeviceChrome {
     /// Full frame — side buttons behind the body — rasterized at an exact
     /// pixel size, optionally rotated 90° for landscape use. Buttons are at
-    /// their rest (slid-out) position.
+    /// their rest (slid-out) position. `pixelSize` covers `paddedSize`, so the
+    /// composite body sits inset by the device padding.
     func frameImage(pixelSize: CGSize, rotated90: Bool = false) -> CGImage? {
         rasterizeCanvas(pixelSize: pixelSize, rotated90: rotated90) { drawRect in
-            let scale = drawRect.width / compositeSize.width
+            let scale = drawRect.width / paddedSize.width
+            let padded = paddedSize
             for button in buttons {
-                let minX = button.minX(outerWidth: compositeSize.width, x: button.restX)
                 let rect = CGRect(
-                    x: minX * scale,
-                    y: drawRect.height - (button.y + button.size.height) * scale,
+                    x: (padding.left + button.restMinX) * scale,
+                    y: (padded.height - padding.top - button.y - button.size.height) * scale,
                     width: button.size.width * scale,
                     height: button.size.height * scale)
                 button.image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
             }
-            composite.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1)
+            composite.draw(
+                in: CGRect(
+                    x: padding.left * scale, y: padding.bottom * scale,
+                    width: compositeSize.width * scale,
+                    height: compositeSize.height * scale),
+                from: .zero, operation: .sourceOver, fraction: 1)
         }
     }
 }
