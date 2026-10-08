@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Present</string>
 	<key>CFBundleIdentifier</key>
-	<string>de.consti.present</string>
+	<string>com.oozou.present</string>
 	<key>CFBundleExecutable</key>
 	<string>Present</string>
 	<key>CFBundlePackageType</key>

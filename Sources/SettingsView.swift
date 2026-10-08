@@ -61,10 +61,10 @@ final class UserBackgrounds: ObservableObject {
 struct SettingsView: View {
     var body: some View {
         TabView {
-            DevicesSettings()
-                .tabItem { Label("Devices", systemImage: "iphone") }
-            StyleSettings()
-                .tabItem { Label("Style", systemImage: "cube.transparent") }
+            PhoneSettings()
+                .tabItem { Label("Phone", systemImage: "iphone") }
+            LookSettings()
+                .tabItem { Label("Look", systemImage: "cube.transparent") }
             BackgroundSettings()
                 .tabItem { Label("Background", systemImage: "photo.on.rectangle.angled") }
             AboutSettings()
@@ -89,30 +89,17 @@ private struct SettingsRow<Content: View>: View {
     }
 }
 
-// MARK: - Devices
+// MARK: - Phone
 
-private struct DevicesSettings: View {
-    @AppStorage("showBezel") private var showBezel = true
-    @AppStorage("phoneModel3D") private var model3D = false
+/// Which phone, how it is shown, and how big. (What it looks like lives in Look.)
+private struct PhoneSettings: View {
     @AppStorage("modelOverride") private var modelOverride = ""
+    @AppStorage("phoneModel3D") private var model3D = false
     @AppStorage("phonePadding") private var phonePadding = 48.0
     @AppStorage("islandMode") private var islandMode = "auto"
-    @AppStorage("deviceFinish") private var deviceFinish = DeviceFinish.original.id
-
-    private func finishColor(_ finish: DeviceFinish) -> Color {
-        guard let rgb = finish.rgb else { return Color(white: 0.22) }
-        return Color(red: rgb.0, green: rgb.1, blue: rgb.2)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            SettingsRow(label: "Device frame") {
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle("Show frame around the screen", isOn: $showBezel)
-                        .disabled(model3D)
-                }
-            }
-
             SettingsRow(label: "Device") {
                 VStack(alignment: .leading, spacing: 4) {
                     Picker("", selection: $modelOverride) {
@@ -123,36 +110,19 @@ private struct DevicesSettings: View {
                     }
                     .labelsHidden()
                     .fixedSize()
-                    caption("Auto follows the connected iPhone. Also picks the 3D model.")
+                    caption("Auto follows the connected iPhone.")
                 }
             }
 
-            SettingsRow(label: "Finish") {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 10) {
-                        ForEach(DeviceFinish.all) { finish in
-                            Button {
-                                deviceFinish = finish.id
-                            } label: {
-                                Circle()
-                                    .fill(finishColor(finish))
-                                    .frame(width: 26, height: 26)
-                                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.2), lineWidth: 1))
-                                    .overlay(
-                                        Circle()
-                                            .inset(by: -3)
-                                            .strokeBorder(
-                                                Color.accentColor,
-                                                lineWidth: deviceFinish == finish.id ? 2.5 : 0))
-                            }
-                            .buttonStyle(.plain)
-                            .help(finish.name)
-                        }
-                    }
-                    caption("\(DeviceFinish.named(deviceFinish).name) · recolors the frame artwork (frame artwork only).")
+            SettingsRow(label: "Display") {
+                Picker("", selection: $model3D) {
+                    Text("Frame artwork").tag(false)
+                    Text("3D model").tag(true)
                 }
+                .labelsHidden()
+                .pickerStyle(.radioGroup)
+                .disabled(!ModelPhone.isAvailable)
             }
-            .disabled(!showBezel || model3D)
 
             SettingsRow(label: "Phone size") {
                 Picker("", selection: $phonePadding) {
@@ -181,21 +151,26 @@ private struct DevicesSettings: View {
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    private func caption(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
 }
 
-// MARK: - Style
+private func caption(_ text: String) -> some View {
+    Text(text)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+}
 
-private struct StyleSettings: View {
+// MARK: - Look
+
+/// Appearance of the phone. Shows only what applies to the chosen display:
+/// frame artwork gets a frame, finish, shadow and reflection; the 3D model
+/// gets an angle.
+private struct LookSettings: View {
+    @AppStorage("phoneModel3D") private var model3D = false
+    @AppStorage("showBezel") private var showBezel = true
+    @AppStorage("deviceFinish") private var deviceFinish = DeviceFinish.original.id
     @AppStorage("phoneShadow") private var shadow = true
     @AppStorage("phoneReflection") private var reflection = false
-    @AppStorage("phoneModel3D") private var model3D = false
     // The pose lives in ModelPose (the window edits it by dragging); this
     // tick just refreshes the sliders while the window is open.
     @State private var tick = 0
@@ -206,71 +181,95 @@ private struct StyleSettings: View {
     var body: some View {
         let _ = tick
         VStack(alignment: .leading, spacing: 18) {
-            SettingsRow(label: "Phone") {
-                VStack(alignment: .leading, spacing: 4) {
-                    Picker("", selection: $model3D) {
-                        Text("Frame artwork").tag(false)
-                        Text("3D model").tag(true)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.radioGroup)
-                    .disabled(!ModelPhone.isAvailable)
-                    Text("Choose the phone under Devices. With the 3D model you can also drag it in the window to rotate, scroll or pinch to zoom, and double-click to reset.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            SettingsRow(label: "Angle") {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        ForEach(SceneStyle.tiltPresets, id: \.name) { preset in
-                            Button(preset.name) {
-                                pose.yaw = preset.yaw / degrees
-                                pose.pitch = preset.pitch / degrees
-                                pose.persist()
-                                tick += 1
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(isCurrent(preset) ? .accentColor : nil)
-                        }
-                    }
-                    slider("Turn", value: Binding(
-                        get: { pose.yaw * degrees },
-                        set: { pose.yaw = $0 / degrees; pose.persist(); tick += 1 }
-                    ), range: -75...75)
-                    slider("Lean", value: Binding(
-                        get: { pose.pitch * degrees },
-                        set: { pose.pitch = $0 / degrees; pose.persist(); tick += 1 }
-                    ), range: -40...40)
-                }
-            }
-            .disabled(!model3D)
-
-            Group {
-                SettingsRow(label: "Shadow") {
-                    Toggle("Soft shadow behind the phone", isOn: $shadow)
-                }
-
-                SettingsRow(label: "Reflection") {
-                    Toggle("Mirror the phone on the surface below", isOn: $reflection)
-                }
-            }
-            .disabled(model3D)
-
-            SettingsRow(label: "") {
-                Text(model3D
-                    ? "Shadow and reflection apply to the frame artwork only."
-                    : "Angle controls are available with the 3D model.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            if model3D { modelControls } else { artworkControls }
         }
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onReceive(Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()) { _ in
             if model3D { tick += 1 }
+        }
+    }
+
+    // MARK: Frame artwork
+
+    @ViewBuilder
+    private var artworkControls: some View {
+        SettingsRow(label: "Frame") {
+            Toggle("Show frame around the screen", isOn: $showBezel)
+        }
+
+        SettingsRow(label: "Finish") {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    ForEach(DeviceFinish.all) { finish in
+                        Button {
+                            deviceFinish = finish.id
+                        } label: {
+                            Circle()
+                                .fill(finishColor(finish))
+                                .frame(width: 26, height: 26)
+                                .overlay(Circle().strokeBorder(Color.primary.opacity(0.2), lineWidth: 1))
+                                .overlay(
+                                    Circle()
+                                        .inset(by: -3)
+                                        .strokeBorder(
+                                            Color.accentColor,
+                                            lineWidth: deviceFinish == finish.id ? 2.5 : 0))
+                        }
+                        .buttonStyle(.plain)
+                        .help(finish.name)
+                    }
+                }
+                caption("\(DeviceFinish.named(deviceFinish).name) · recolors the frame artwork.")
+            }
+        }
+        .disabled(!showBezel)
+
+        SettingsRow(label: "Shadow") {
+            Toggle("Soft shadow behind the phone", isOn: $shadow)
+        }
+
+        SettingsRow(label: "Reflection") {
+            Toggle("Mirror the phone on the surface below", isOn: $reflection)
+        }
+    }
+
+    private func finishColor(_ finish: DeviceFinish) -> Color {
+        guard let rgb = finish.rgb else { return Color(white: 0.22) }
+        return Color(red: rgb.0, green: rgb.1, blue: rgb.2)
+    }
+
+    // MARK: 3D model
+
+    @ViewBuilder
+    private var modelControls: some View {
+        SettingsRow(label: "Angle") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    ForEach(SceneStyle.tiltPresets, id: \.name) { preset in
+                        Button(preset.name) {
+                            pose.yaw = preset.yaw / degrees
+                            pose.pitch = preset.pitch / degrees
+                            pose.persist()
+                            tick += 1
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(isCurrent(preset) ? .accentColor : nil)
+                    }
+                }
+                slider("Turn", value: Binding(
+                    get: { pose.yaw * degrees },
+                    set: { pose.yaw = $0 / degrees; pose.persist(); tick += 1 }
+                ), range: -75...75)
+                slider("Lean", value: Binding(
+                    get: { pose.pitch * degrees },
+                    set: { pose.pitch = $0 / degrees; pose.persist(); tick += 1 }
+                ), range: -40...40)
+            }
+        }
+
+        SettingsRow(label: "") {
+            caption("You can also drag the phone in the window to rotate it, scroll or pinch to zoom, and double-click to reset.")
         }
     }
 

@@ -161,21 +161,7 @@ struct ContentView: View {
     }
 
     private func sceneSpec() -> SceneSpec? {
-        guard let streamSize = capture.streamSize else { return nil }
-        let inferred = PhoneModel.infer(from: streamSize)
-        let identifier = modelOverride.isEmpty
-            ? (capture.modelIdentifier ?? inferred.identifier)
-            : modelOverride
-        return SceneSpec(
-            streamSize: streamSize,
-            chrome: showBezel
-                ? DeviceChrome.load(modelIdentifier: identifier, finish: deviceFinish) : nil,
-            fallbackStyle: inferred.bezel,
-            showBezel: showBezel,
-            backgroundPresetID: backgroundPreset,
-            backgroundImagePath: backgroundImagePath,
-            backgroundColorHex: backgroundColorHex,
-            style: style)
+        SceneSpec.current(capture: capture)
     }
 }
 
