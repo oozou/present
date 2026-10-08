@@ -9,7 +9,11 @@ final class MediaExporter: ObservableObject {
     @Published private(set) var isRecording = false
     @Published var toast: String?
 
-    private let ciContext = CIContext()
+    /// No working color space: layers composite directly in their (sRGB-like)
+    /// values, like CoreGraphics and the live SwiftUI view do. The default
+    /// linear-light blending makes the semi-transparent bezel glass bleed the
+    /// background through, tinting it.
+    private let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
     private let lock = NSLock()
 
     // Recording state, guarded by `lock` (written from main, read from capture queue).
@@ -46,15 +50,18 @@ final class MediaExporter: ObservableObject {
 
     // MARK: - Screenshot
 
-    func saveScreenshot(spec: SceneSpec, frame: CVPixelBuffer, overlayIsland: Bool) {
+    func saveScreenshot(
+        spec: SceneSpec, frame: CVPixelBuffer, overlayIsland: Bool, to destination: URL? = nil
+    ) {
         guard let renderer = SceneRenderer(spec: spec, ciContext: ciContext),
               let cgImage = renderer.composeCGImage(frame, overlayIsland: overlayIsland)
         else {
             showToast("Screenshot failed")
             return
         }
-        let dir = Self.captureDirectory
-        let url = dir.appendingPathComponent("Present \(Self.timestamp.string(from: Date())).png")
+        let dir = destination?.deletingLastPathComponent() ?? Self.captureDirectory
+        let url = destination
+            ?? dir.appendingPathComponent("Present \(Self.timestamp.string(from: Date())).png")
         let rep = NSBitmapImageRep(cgImage: cgImage)
         guard let data = rep.representation(using: .png, properties: [:]) else {
             showToast("Screenshot failed")

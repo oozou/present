@@ -11,6 +11,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Present "$APP/Contents/MacOS/Present"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp -R Resources/Models "$APP/Contents/Resources/Models"
 
 # Ad-hoc signature so TCC (camera permission) works reliably.
 codesign --force --sign - "$APP"

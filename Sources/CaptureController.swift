@@ -28,6 +28,8 @@ final class CaptureController: NSObject, ObservableObject {
     /// immediately; AVCaptureVideoPreviewLayer adds noticeable lag on iPhone
     /// screen devices (it syncs to the session clock).
     nonisolated(unsafe) let displayLayer = AVSampleBufferDisplayLayer()
+    /// Second layer for the reflection; only fed while it is on screen.
+    nonisolated(unsafe) let reflectionLayer = AVSampleBufferDisplayLayer()
 
     private var device: AVCaptureDevice?
     private var formatObservation: NSKeyValueObservation?
@@ -81,6 +83,11 @@ final class CaptureController: NSObject, ObservableObject {
             self, selector: #selector(portFormatChanged(_:)),
             name: .AVCaptureInputPortFormatDescriptionDidChange, object: nil)
 
+        if ProcessInfo.processInfo.environment["PRESENT_TEST_PATTERN"] != nil {
+            startTestPattern()
+            return
+        }
+
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             Log.write("camera access already authorized")
@@ -100,6 +107,20 @@ final class CaptureController: NSObject, ObservableObject {
             Log.write("camera access denied/restricted")
             status = .accessDenied
         }
+    }
+
+    private var testSource: TestPatternSource?
+
+    /// Debug: synthetic stream (see TestPattern.swift).
+    private func startTestPattern() {
+        Log.write("test pattern enabled")
+        let source = TestPatternSource(size: CGSize(width: 1206, height: 2622))
+        testSource = source
+        deviceName = "Test Pattern"
+        modelIdentifier = "iPhone17,1"
+        streamSize = source.size
+        status = .streaming
+        source.start { [weak self] sample in self?.handleFrame(sample) }
     }
 
     /// Opt in to CoreMediaIO "screen capture" devices so iOS devices show up
@@ -278,6 +299,11 @@ extension CaptureController: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
+        handleFrame(sampleBuffer)
+    }
+
+    /// Shared by the real capture delegate and the debug test pattern.
+    nonisolated func handleFrame(_ sampleBuffer: CMSampleBuffer) {
         if let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
             latestFrameLock.lock()
             _latestFrame = buffer
@@ -310,9 +336,13 @@ extension CaptureController: AVCaptureVideoDataOutputSampleBufferDelegate {
             attachments.first?[kCMSampleAttachmentKey_DisplayImmediately] = true
         }
 
-        if displayLayer.status == .failed { displayLayer.flush() }
-        if displayLayer.isReadyForMoreMediaData {
-            displayLayer.enqueue(retimed)
+        for layer in [displayLayer, reflectionLayer] {
+            // The reflection layer is only in the view tree while enabled.
+            if layer === reflectionLayer && layer.superlayer == nil { continue }
+            if layer.status == .failed { layer.flush() }
+            if layer.isReadyForMoreMediaData {
+                layer.enqueue(retimed)
+            }
         }
     }
 

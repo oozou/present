@@ -2,14 +2,25 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var capture: CaptureController
+    @Environment(\.openSettings) private var openSettings
 
     @AppStorage("backgroundPreset") private var backgroundPreset = 0
     @AppStorage("backgroundImagePath") private var backgroundImagePath = ""
     @AppStorage("backgroundColorHex") private var backgroundColorHex = ""
     @AppStorage("showBezel") private var showBezel = true
-    @AppStorage("frameMode") private var frameMode = "photoreal" // photoreal | drawn
-    @AppStorage("modelOverride") private var modelOverride = "" // "" = auto
+    @AppStorage("deviceFinish") private var deviceFinish = DeviceFinish.original.id
+    @AppStorage("phoneShadow") private var phoneShadow = true
+    @AppStorage("phoneReflection") private var phoneReflection = false
+    @AppStorage("phoneModel3D") private var phoneModel3D = false
+    @AppStorage("modelOverride") private var modelOverride = "" // "" = follow the connected phone
     @AppStorage("phonePadding") private var phonePadding = 48.0
+
+    private var style: SceneStyle {
+        SceneStyle(
+            shadow: phoneShadow, reflection: phoneReflection, model3D: phoneModel3D,
+            modelID: PhoneModelSpec.resolve(
+                override: modelOverride, device: capture.modelIdentifier).id)
+    }
 
     @State private var barVisible = false
     @State private var flash = 0.0
@@ -30,8 +41,10 @@ struct ContentView: View {
 
                 PhoneView(
                     showBezel: showBezel,
-                    useChrome: frameMode == "photoreal",
-                    modelOverride: modelOverride)
+                    useChrome: true,
+                    modelOverride: modelOverride,
+                    finish: deviceFinish,
+                    style: style)
                     .padding(phonePadding)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -46,7 +59,6 @@ struct ContentView: View {
                     ControlBar(
                         media: capture.media,
                         showBezel: $showBezel,
-                        frameMode: $frameMode,
                         modelOverride: $modelOverride,
                         phonePadding: $phonePadding,
                         makeSpec: sceneSpec,
@@ -69,6 +81,7 @@ struct ContentView: View {
                 }
             }
             .background(calibrationShortcuts)
+            .task { await debugExportIfRequested() }
             // Dock-style reveal: only when the cursor is near the bottom edge.
             .onContinuousHover { phase in
                 let visible: Bool
@@ -121,6 +134,25 @@ struct ContentView: View {
         }
     }
 
+    /// Debug: `PRESENT_TEST_EXPORT=/path.png` saves one composed screenshot a
+    /// few seconds after launch (used with PRESENT_TEST_PATTERN) and quits.
+    private func debugExportIfRequested() async {
+        if ProcessInfo.processInfo.environment["PRESENT_OPEN_SETTINGS"] != nil {
+            try? await Task.sleep(for: .seconds(1))
+            NSApp.activate(ignoringOtherApps: true)
+            openSettings()
+        }
+        guard let path = ProcessInfo.processInfo.environment["PRESENT_TEST_EXPORT"] else { return }
+        try? await Task.sleep(for: .seconds(3))
+        if let spec = sceneSpec(), let frame = capture.latestFrame {
+            capture.media.saveScreenshot(
+                spec: spec, frame: frame, overlayIsland: capture.islandOverlayNeededNow,
+                to: URL(fileURLWithPath: path))
+        }
+        try? await Task.sleep(for: .seconds(1))
+        NSApp.terminate(nil)
+    }
+
     private func triggerFlash() {
         flash = 0.85
         DispatchQueue.main.async {
@@ -136,13 +168,14 @@ struct ContentView: View {
             : modelOverride
         return SceneSpec(
             streamSize: streamSize,
-            chrome: showBezel && frameMode == "photoreal"
-                ? DeviceChrome.load(modelIdentifier: identifier) : nil,
+            chrome: showBezel
+                ? DeviceChrome.load(modelIdentifier: identifier, finish: deviceFinish) : nil,
             fallbackStyle: inferred.bezel,
             showBezel: showBezel,
             backgroundPresetID: backgroundPreset,
             backgroundImagePath: backgroundImagePath,
-            backgroundColorHex: backgroundColorHex)
+            backgroundColorHex: backgroundColorHex,
+            style: style)
     }
 }
 
@@ -166,7 +199,6 @@ private struct ControlBar: View {
     @ObservedObject var media: MediaExporter
 
     @Binding var showBezel: Bool
-    @Binding var frameMode: String
     @Binding var modelOverride: String
     @Binding var phonePadding: Double
     let makeSpec: () -> SceneSpec?
@@ -187,12 +219,6 @@ private struct ControlBar: View {
             .help("Show device frame")
 
             Menu {
-                Picker("Frame style", selection: $frameMode) {
-                    Text("Photoreal (Simulator art)").tag("photoreal")
-                    Text("Stylized (drawn)").tag("drawn")
-                }
-                .pickerStyle(.inline)
-
                 Picker("Dynamic Island", selection: $islandMode) {
                     Text("Fill when idle").tag("auto")
                     Text("Always (calibrate)").tag("always")

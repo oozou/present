@@ -12,6 +12,12 @@ struct PhoneView: View {
     let useChrome: Bool
     /// Hardware identifier override ("" = auto).
     let modelOverride: String
+    /// `DeviceFinish` id.
+    let finish: String
+    var style = SceneStyle()
+    /// The mirrored copy under the phone; shows the same stream via a second
+    /// display layer and never draws a shadow.
+    var isReflection = false
 
     private var screenAspect: CGSize {
         if let size = capture.streamSize, size.width > 0, size.height > 0 {
@@ -27,13 +33,54 @@ struct PhoneView: View {
 
     var body: some View {
         GeometryReader { geo in
-            if showBezel, useChrome,
-               let chrome = DeviceChrome.load(modelIdentifier: chromeIdentifier) {
-                chromeBody(chrome, available: geo.size)
+            if style.model3D && ModelPhone.isAvailable {
+                ModelPhoneView(capture: capture, spec: PhoneModelSpec.named(style.modelID))
+                    .id(style.modelID)
+                    .frame(width: geo.size.width, height: geo.size.height)
+            } else if style.reflection && !isReflection {
+                let h = geo.size.height / (1 + SceneStyle.reflectionDepth)
+                ZStack(alignment: .top) {
+                    phone(in: CGSize(width: geo.size.width, height: h))
+                        .frame(width: geo.size.width, height: h)
+                    reflectionCopy(width: geo.size.width, height: h)
+                }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                .tilted(style)
             } else {
-                fallbackBody(available: geo.size)
+                phone(in: geo.size)
+                    .tilted(isReflection ? SceneStyle() : style)
             }
         }
+    }
+
+    @ViewBuilder
+    private func phone(in size: CGSize) -> some View {
+        if showBezel, useChrome,
+           let chrome = DeviceChrome.load(modelIdentifier: chromeIdentifier, finish: finish) {
+            chromeBody(chrome, available: size)
+        } else {
+            fallbackBody(available: size)
+        }
+    }
+
+    /// Flipped, faded copy sitting directly below the phone. Only the copy is
+    /// masked; the primary video layer is never masked or composited twice.
+    private func reflectionCopy(width: CGFloat, height: CGFloat) -> some View {
+        PhoneView(
+            showBezel: showBezel, useChrome: useChrome, modelOverride: modelOverride,
+            finish: finish, style: style, isReflection: true)
+            .frame(width: width, height: height)
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .clear, location: 0.6),
+                        .init(color: .white.opacity(0.4), location: 1),
+                    ],
+                    startPoint: .top, endPoint: .bottom))
+            .scaleEffect(x: 1, y: -1)
+            .offset(y: height)
+            .allowsHitTesting(false)
     }
 
     // MARK: - Simulator chrome
@@ -71,7 +118,9 @@ struct PhoneView: View {
 
         ZStack {
             rotatable(frameStack, width: ow, height: oh, landscape: landscape)
-                .shadow(color: .black.opacity(0.4), radius: ow * 0.05, y: ow * 0.015)
+                .shadow(
+                    color: .black.opacity(style.shadow && !isReflection ? 0.4 : 0),
+                    radius: ow * 0.05, y: ow * 0.015)
 
             screen
                 .frame(width: sw, height: sh)
@@ -124,7 +173,9 @@ struct PhoneView: View {
                         RoundedRectangle(cornerRadius: m.outerCornerRadius, style: .continuous)
                             .strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
                     .frame(width: m.outerSize.width, height: m.outerSize.height)
-                    .shadow(color: .black.opacity(0.45), radius: m.unit * 1.6, y: m.unit * 0.6)
+                    .shadow(
+                        color: .black.opacity(style.shadow && !isReflection ? 0.45 : 0),
+                        radius: m.unit * 1.6, y: m.unit * 0.6)
             }
 
             screen
@@ -152,7 +203,7 @@ struct PhoneView: View {
     @ViewBuilder
     private var screen: some View {
         if capture.isStreaming {
-            PreviewView(layer: capture.displayLayer)
+            PreviewView(layer: isReflection ? capture.reflectionLayer : capture.displayLayer)
                 .overlay(islandOverlay)
         } else {
             placeholder
@@ -327,6 +378,25 @@ struct PhoneMetrics {
         case nil:
             screenCornerRadius = unit * 0.8
             outerCornerRadius = 0
+        }
+    }
+}
+
+extension View {
+    /// 3D tilt of the whole phone group. The layers underneath are transformed
+    /// by the compositor, so the live video isn't re-rendered.
+    @ViewBuilder
+    func tilted(_ style: SceneStyle) -> some View {
+        if style.isTilted {
+            self
+                .rotation3DEffect(
+                    .degrees(style.yaw), axis: (x: 0, y: 1, z: 0),
+                    anchor: .center, anchorZ: 0, perspective: 0.3)
+                .rotation3DEffect(
+                    .degrees(style.pitch), axis: (x: 1, y: 0, z: 0),
+                    anchor: .center, anchorZ: 0, perspective: 0.3)
+        } else {
+            self
         }
     }
 }

@@ -73,12 +73,20 @@ struct DeviceChrome {
         return map
     }()
 
-    static func load(modelIdentifier: String) -> DeviceChrome? {
+    static func load(modelIdentifier: String, finish: String = DeviceFinish.original.id) -> DeviceChrome? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        if let cached = cache[modelIdentifier] { return cached }
-        let built = build(modelIdentifier: modelIdentifier)
-        cache[modelIdentifier] = built
+        let key = "\(modelIdentifier)|\(finish)"
+        if let cached = cache[key] { return cached }
+        let built: DeviceChrome?
+        if finish == DeviceFinish.original.id {
+            built = build(modelIdentifier: modelIdentifier)
+        } else if let base = build(modelIdentifier: modelIdentifier) {
+            built = base.tinted(DeviceFinish.named(finish))
+        } else {
+            built = nil
+        }
+        cache[key] = built
         return built
     }
 
@@ -234,4 +242,66 @@ func rasterizeCanvas(
     draw(CGRect(origin: .zero, size: drawSize))
     NSGraphicsContext.restoreGraphicsState()
     return ctx.makeImage()
+}
+
+// MARK: - Finishes
+
+/// A recolor of the stock (graphite) simulator artwork. The bundles ship a
+/// single finish, so others are made by colorizing the frame's luminance;
+/// pure-black glass stays black, only the metal band takes the color.
+struct DeviceFinish: Identifiable {
+    let id: String
+    let name: String
+    /// nil = the artwork as shipped.
+    let rgb: (Double, Double, Double)?
+    /// Gamma applied before colorizing; lower lifts the dark metal more.
+    let lift: Double
+
+    static let original = DeviceFinish(id: "original", name: "Graphite", rgb: nil, lift: 1)
+
+    static let all: [DeviceFinish] = [
+        original,
+        .init(id: "silver", name: "Silver", rgb: (0.86, 0.87, 0.89), lift: 0.35),
+        .init(id: "natural", name: "Natural", rgb: (0.80, 0.76, 0.70), lift: 0.45),
+        .init(id: "desert", name: "Desert", rgb: (0.84, 0.68, 0.54), lift: 0.50),
+        .init(id: "blue", name: "Blue", rgb: (0.40, 0.52, 0.68), lift: 0.55),
+        .init(id: "pink", name: "Pink", rgb: (0.90, 0.66, 0.72), lift: 0.50),
+        .init(id: "white", name: "White", rgb: (0.96, 0.96, 0.95), lift: 0.30),
+    ]
+
+    static func named(_ id: String) -> DeviceFinish {
+        all.first { $0.id == id } ?? original
+    }
+}
+
+extension DeviceChrome {
+    /// Copy of this chrome with the frame and button artwork recolored.
+    func tinted(_ finish: DeviceFinish) -> DeviceChrome {
+        guard let rgb = finish.rgb else { return self }
+        let ctx = CIContext()
+        func tint(_ image: NSImage) -> NSImage {
+            // 4x the point size keeps the bitmap sharp when drawn big.
+            let px = CGSize(width: image.size.width * 4, height: image.size.height * 4)
+            guard let cg = rasterize(image, pixelSize: px) else { return image }
+            let input = CIImage(cgImage: cg)
+            let color = CIColor(red: rgb.0, green: rgb.1, blue: rgb.2)
+            guard let gamma = CIFilter(name: "CIGammaAdjust", parameters: [
+                      kCIInputImageKey: input, "inputPower": finish.lift]),
+                  let mono = CIFilter(name: "CIColorMonochrome", parameters: [
+                      kCIInputImageKey: gamma.outputImage as Any,
+                      kCIInputColorKey: color, kCIInputIntensityKey: 1.0]),
+                  let out = mono.outputImage,
+                  let result = ctx.createCGImage(out, from: input.extent)
+            else { return image }
+            return NSImage(cgImage: result, size: image.size)
+        }
+        return DeviceChrome(
+            composite: tint(composite), mask: mask,
+            buttons: buttons.map {
+                ChromeButton(
+                    id: $0.id, image: tint($0.image), imageDown: $0.imageDown.map(tint),
+                    size: $0.size, y: $0.y, restMinX: $0.restMinX, tuckedMinX: $0.tuckedMinX)
+            },
+            compositeSize: compositeSize, padding: padding)
+    }
 }

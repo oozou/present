@@ -41,15 +41,10 @@ struct PhoneModel {
         }
     }
 
-    /// Manual override choices for the frame menu.
+    /// The two supported phones. Identifiers pick the frame artwork; the
+    /// Pro Max uses the iPhone 17 Pro Max chrome (same shape).
     static let overrideChoices: [(name: String, identifier: String)] = [
-        ("iPhone 17 Pro Max", "iPhone18,2"),
-        ("iPhone 17 Pro", "iPhone18,1"),
-        ("iPhone 17", "iPhone18,3"),
         ("iPhone Air", "iPhone18,4"),
-        ("iPhone 16 Pro", "iPhone17,1"),
-        ("iPhone 16", "iPhone17,3"),
-        ("iPhone 13", "iPhone14,5"),
-        ("iPhone SE", "iPhone12,8"),
+        ("iPhone 18 Pro Max", "iPhone18,2"),
     ]
 }

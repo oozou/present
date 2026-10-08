@@ -48,6 +48,8 @@ struct BackgroundPreset: Identifiable {
 enum BackgroundSelection {
     static let image = -1
     static let customColor = -2
+    /// An animated background; `backgroundImagePath` holds the video file.
+    static let video = -3
 }
 
 /// "#RRGGBB" <-> color helpers for the user's custom solid color.
@@ -82,6 +84,8 @@ struct BackgroundView: View {
         if presetID == BackgroundSelection.customColor,
            let color = BackgroundColor.nsColor(hex: colorHex) {
             Color(nsColor: color).ignoresSafeArea()
+        } else if presetID == BackgroundSelection.video {
+            VideoBackgroundView(path: imagePath)
         } else if presetID == BackgroundSelection.image {
             BackgroundImageView(path: imagePath)
         } else {
