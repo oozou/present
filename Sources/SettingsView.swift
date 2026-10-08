@@ -300,6 +300,7 @@ private struct BackgroundSettings: View {
     @StateObject private var library = UserBackgrounds.shared
     @State private var showingImporter = false
     @State private var colorPanel = ColorPanelBridge()
+    @State private var videoWallpapers = VideoWallpapers.load()
 
     // 5 tiles + label column + padding must fit SettingsView's width (600):
     // 24 + 100 + 12 + (5·76 + 4·10) + 24 = 580, plus room for the scroll bar.
@@ -342,10 +343,10 @@ private struct BackgroundSettings: View {
                     }
                 }
 
-                if !VideoWallpapers.all.isEmpty {
+                if !videoWallpapers.isEmpty {
                     SettingsRow(label: "Animated") {
                         LazyVGrid(columns: columns, alignment: .leading, spacing: spacing) {
-                            ForEach(VideoWallpapers.all) { wallpaper in
+                            ForEach(videoWallpapers) { wallpaper in
                                 tile(selected: isSelected(path: wallpaper.url.path)) {
                                     select(path: wallpaper.url.path)
                                 } content: {
@@ -413,6 +414,7 @@ private struct BackgroundSettings: View {
             .padding(24)
         }
         .frame(height: 480)
+        .onAppear { videoWallpapers = VideoWallpapers.load() }
         .fileImporter(
             isPresented: $showingImporter,
             allowedContentTypes: [.image, .movie],
@@ -492,7 +494,7 @@ private struct BackgroundSettings: View {
     private var selectionName: String {
         switch backgroundPreset {
         case BackgroundSelection.video:
-            return VideoWallpapers.all.first { $0.url.path == backgroundImagePath }?.name
+            return videoWallpapers.first { $0.url.path == backgroundImagePath }?.name
                 ?? "Your video"
         case BackgroundSelection.image:
             return SystemWallpapers.all.first { $0.url.path == backgroundImagePath }?.name

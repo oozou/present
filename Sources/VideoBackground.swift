@@ -1,6 +1,7 @@
 import AVFoundation
 import AppKit
 import CoreImage
+import SQLite3
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -155,9 +156,9 @@ struct VideoWallpaper: Identifiable {
 
 enum VideoWallpapers {
     /// Videos that ship with macOS plus any aerials downloaded for this user.
-    static let all: [VideoWallpaper] = load()
-
-    private static func load() -> [VideoWallpaper] {
+    /// Read fresh each time: aerials appear as they're downloaded in System
+    /// Settings, so a list cached at launch goes stale.
+    static func load() -> [VideoWallpaper] {
         let fm = FileManager.default
         var result: [VideoWallpaper] = []
 
@@ -171,10 +172,43 @@ enum VideoWallpapers {
 
         let aerials = fm.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials/videos")
-        let files = (try? fm.contentsOfDirectory(at: aerials, includingPropertiesForKeys: nil)) ?? []
-        for (index, url) in files.filter({ $0.pathExtension.lowercased() == "mov" }).enumerated() {
-            result.append(VideoWallpaper(name: "Aerial \(index + 1)", url: url))
+        let files = (try? fm.contentsOfDirectory(
+            at: aerials, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let names = aerialNames()
+        let videos = files
+            .filter { $0.pathExtension.lowercased() == "mov" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        for (index, url) in videos.enumerated() {
+            let id = url.deletingPathExtension().lastPathComponent.uppercased()
+            result.append(VideoWallpaper(name: names[id] ?? "Aerial \(index + 1)", url: url))
         }
+        Log.write("animated wallpapers: \(result.map(\.name).joined(separator: ", "))")
         return result
+    }
+
+    /// Aerial file names are asset IDs; macOS keeps their titles in a database.
+    private static func aerialNames() -> [String: String] {
+        let path = "/Library/Application Support/com.apple.idleassetsd/Aerial.sqlite"
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            return [:]
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db, "SELECT ZIDENTIFIER, ZACCESSIBILITYLABEL FROM ZASSET", -1, &statement, nil) == SQLITE_OK
+        else { return [:] }
+        defer { sqlite3_finalize(statement) }
+
+        var names: [String: String] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let id = sqlite3_column_text(statement, 0),
+                  let label = sqlite3_column_text(statement, 1)
+            else { continue }
+            let title = String(cString: label)
+            if !title.isEmpty { names[String(cString: id).uppercased()] = title }
+        }
+        return names
     }
 }
