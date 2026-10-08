@@ -58,9 +58,6 @@ struct ContentView: View {
                     ToastView(media: capture.media)
                     ControlBar(
                         media: capture.media,
-                        showBezel: $showBezel,
-                        modelOverride: $modelOverride,
-                        phonePadding: $phonePadding,
                         makeSpec: sceneSpec,
                         triggerFlash: triggerFlash)
                         .opacity(barVisible ? 1 : 0)
@@ -184,13 +181,10 @@ private struct ControlBar: View {
     @EnvironmentObject private var capture: CaptureController
     @ObservedObject var media: MediaExporter
 
-    @Binding var showBezel: Bool
-    @Binding var modelOverride: String
-    @Binding var phonePadding: Double
     let makeSpec: () -> SceneSpec?
     let triggerFlash: () -> Void
 
-    @AppStorage("islandMode") private var islandMode = "auto"
+    @AppStorage("phoneModel3D") private var model3D = false
 
     var body: some View {
         HStack(spacing: 14) {
@@ -198,44 +192,17 @@ private struct ControlBar: View {
 
             Divider().frame(height: 18)
 
-            Toggle(isOn: $showBezel) {
-                Image(systemName: "iphone")
-            }
-            .toggleStyle(.button)
-            .help("Show device frame")
-
-            Menu {
-                Picker("Dynamic Island", selection: $islandMode) {
-                    Text("Fill when idle").tag("auto")
-                    Text("Always (calibrate)").tag("always")
-                    Text("Off").tag("off")
-                }
-                .pickerStyle(.inline)
-
-                Divider()
-
-                Picker("Device", selection: $modelOverride) {
-                    Text("Auto (detected)").tag("")
-                    ForEach(PhoneModel.overrideChoices, id: \.identifier) { choice in
-                        Text(choice.name).tag(choice.identifier)
-                    }
-                }
-                .pickerStyle(.inline)
-
-                Divider()
-
-                Picker("Phone size", selection: $phonePadding) {
-                    Text("Large").tag(24.0)
-                    Text("Medium").tag(48.0)
-                    Text("Small").tag(96.0)
-                }
-                .pickerStyle(.inline)
+            // The one setting worth a quick toggle: flat frame artwork or the
+            // draggable 3D model. Everything else lives in Settings.
+            Button {
+                model3D.toggle()
             } label: {
-                Image(systemName: "slider.horizontal.3")
+                Image(systemName: model3D ? "cube" : "iphone")
+                    .frame(width: 18)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Device model and size")
+            .buttonStyle(.plain)
+            .disabled(!ModelPhone.isAvailable)
+            .help(model3D ? "Showing the 3D model — switch to frame artwork" : "Showing frame artwork — switch to the 3D model")
 
             Divider().frame(height: 18)
 
@@ -260,10 +227,10 @@ private struct ControlBar: View {
             Divider().frame(height: 18)
 
             SettingsLink {
-                Image(systemName: "photo.on.rectangle.angled")
+                Image(systemName: "gearshape")
             }
             .buttonStyle(.plain)
-            .help("Backgrounds and settings (⌘,)")
+            .help("Settings (⌘,)")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
