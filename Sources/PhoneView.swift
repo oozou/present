@@ -125,13 +125,12 @@ struct PhoneView: View {
             screen
                 .frame(width: sw, height: sh)
                 .mask {
-                    if let mask = chrome.mask {
-                        rotatable(Image(nsImage: mask).resizable(),
-                                  width: sw, height: sh, landscape: landscape)
-                    } else {
-                        RoundedRectangle(
-                            cornerRadius: min(sw, sh) * 0.11, style: .continuous)
-                    }
+                    // Concentric with the frame's glass (a phone's own mask can
+                    // differ slightly from the shared artwork's opening).
+                    RoundedRectangle(
+                        cornerRadius: chrome.screenCornerRadius(portraitAspect: portraitAspect)
+                            * pw / chrome.compositeSize.width,
+                        style: .continuous)
                 }
         }
         .frame(width: available.width, height: available.height)

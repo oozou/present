@@ -293,13 +293,19 @@ final class SceneRenderer {
         ctx.fill(CGRect(origin: .zero, size: geo.canvas))
 
         let landscape = spec.streamSize.width > spec.streamSize.height
-        if spec.showBezel, let chrome = spec.chrome, let mask = chrome.mask,
-           let maskImg = rasterize(mask, pixelSize: geo.screenRect.size, rotated90: landscape) {
-            ctx.saveGState()
-            ctx.clip(to: geo.screenRect, mask: maskImg)
+        if spec.showBezel, let chrome = spec.chrome {
+            // Same concentric radius as the live view, in stream pixels.
+            let s = spec.streamSize
+            let portraitAspect = landscape ? s.height / s.width : s.width / s.height
+            let screenPoints = chrome.screenFraction(portraitAspect: portraitAspect).width
+                * chrome.compositeSize.width
+            let radius = chrome.screenCornerRadius(portraitAspect: portraitAspect)
+                * min(s.width, s.height) / screenPoints
+            ctx.addPath(CGPath(
+                roundedRect: geo.screenRect, cornerWidth: radius, cornerHeight: radius,
+                transform: nil))
             ctx.setFillColor(CGColor(gray: 1, alpha: 1))
-            ctx.fill(geo.screenRect)
-            ctx.restoreGState()
+            ctx.fillPath()
         } else {
             let radius = spec.showBezel
                 ? min(geo.screenRect.width, geo.screenRect.height)

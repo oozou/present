@@ -44,13 +44,19 @@ struct PhoneModelSpec: Identifiable {
     /// Whether texture U/V run against the on-screen X/Y.
     let flipU: Bool
     let flipV: Bool
+    /// Black border (fraction of the screen width) drawn inside the screen
+    /// texture, for models whose glass has no bezel of its own.
+    var bezelInset: CGFloat = 0
+    /// Corner radius of the glass as a fraction of the screen width (measured
+    /// from the model's texture); the inner screen keeps it concentric.
+    var cornerRadius: CGFloat = 0.12
 
     static let all: [PhoneModelSpec] = [
         PhoneModelSpec(
             id: "air", name: "iPhone Air", file: "iPhone_Air",
             faceRotationY: -.pi / 2, screenMaterial: "Glass___Heavy_Color",
             screenUV: CGRect(x: 8.0 / 1024, y: 8.0 / 1024, width: 446.0 / 1024, height: 977.0 / 1024),
-            flipU: true, flipV: false),
+            flipU: true, flipV: false, bezelInset: 0.005, cornerRadius: 0.1455),
         PhoneModelSpec(
             id: "pro", name: "iPhone 18 Pro Max", file: "iPhone_18_Pro_Max",
             faceRotationY: 0, screenMaterial: "COLOUR_Cherry_Screen",
@@ -190,21 +196,38 @@ final class ModelPhone {
     private func configureLighting() {
         scene.background.contents = NSColor.clear
         scene.lightingEnvironment.contents = Self.studioEnvironment()
-        scene.lightingEnvironment.intensity = 1.4
+        scene.lightingEnvironment.intensity = 2.0
     }
 
-    /// A small procedural studio: soft gradient with two bright softboxes, so
-    /// the aluminum and glass have something to reflect.
+    /// A dark product-shot studio: near-black room ringed with large softboxes
+    /// across the horizon, so the polished metal rails reflect broad bright
+    /// bands from any angle (like Quick Look's studio), and glass sees crisp
+    /// strips.
     private static func studioEnvironment() -> NSImage {
-        let size = NSSize(width: 1024, height: 512)
+        let size = NSSize(width: 2048, height: 1024)
         return NSImage(size: size, flipped: false) { rect in
-            let gradient = NSGradient(colors: [
-                NSColor(white: 0.10, alpha: 1), NSColor(white: 0.55, alpha: 1), NSColor(white: 0.95, alpha: 1),
-            ])
-            gradient?.draw(in: rect, angle: 90)
-            NSColor.white.setFill()
-            NSBezierPath(roundedRect: NSRect(x: 150, y: 250, width: 160, height: 190), xRadius: 24, yRadius: 24).fill()
-            NSBezierPath(roundedRect: NSRect(x: 640, y: 280, width: 220, height: 150), xRadius: 24, yRadius: 24).fill()
+            NSGradient(colorsAndLocations:
+                (NSColor(white: 0.03, alpha: 1), 0.0),
+                (NSColor(white: 0.10, alpha: 1), 0.40),
+                (NSColor(white: 0.22, alpha: 1), 0.55),
+                (NSColor(white: 0.55, alpha: 1), 1.0)
+            )?.draw(in: rect, angle: 90)
+
+            func box(_ r: NSRect, _ white: CGFloat, radius: CGFloat = 14) {
+                NSColor(white: white, alpha: 1).setFill()
+                NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius).fill()
+            }
+            // Horizon softboxes (what side rails mostly reflect).
+            for (index, x) in [150.0, 660.0, 1170.0, 1680.0].enumerated() {
+                box(NSRect(x: x, y: 360, width: 300 - CGFloat(index % 2) * 90, height: 330), 1.0)
+            }
+            // Thin vertical strips between them for crisp edge glints.
+            for x in [500.0, 1010.0, 1520.0, 1960.0] {
+                box(NSRect(x: x, y: 330, width: 40, height: 400), 0.9, radius: 6)
+            }
+            // Overhead bars.
+            box(NSRect(x: 700, y: 840, width: 640, height: 80), 1.0)
+            box(NSRect(x: 200, y: 760, width: 360, height: 70), 0.9)
             return true
         }
     }
@@ -235,6 +258,7 @@ final class ModelPhone {
         let isLandscape = w > h
         if isLandscape { image = image.oriented(.right) }   // portrait for the portrait-UV screen
         let size = isLandscape ? CGSize(width: h, height: w) : CGSize(width: w, height: h)
+        if spec.bezelInset > 0 { image = withBezel(image, size: size) }
         if isLandscape != landscape {
             landscape = isLandscape
             applyPose()
@@ -267,6 +291,41 @@ final class ModelPhone {
         SCNTransaction.disableActions = true
         for material in screenMaterials { material.diffuse.contents = texture }
         SCNTransaction.commit()
+    }
+
+    private var bezelMaskCache: (size: CGSize, image: CIImage)?
+
+    /// Shrinks the picture into a rounded inner screen on black, so the glass
+    /// gets the thin black bezel a real iPhone has.
+    private func withBezel(_ image: CIImage, size: CGSize) -> CIImage {
+        let d = (size.width * spec.bezelInset).rounded()
+        let inner = CGRect(x: d, y: d, width: size.width - 2 * d, height: size.height - 2 * d)
+
+        if bezelMaskCache?.size != size {
+            let radius = max(0, size.width * spec.cornerRadius - d)
+            if let ctx = CGContext(
+                data: nil, width: Int(size.width), height: Int(size.height),
+                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+                ctx.fill(CGRect(origin: .zero, size: size))
+                ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+                ctx.addPath(CGPath(roundedRect: inner, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                ctx.fillPath()
+                if let cg = ctx.makeImage() { bezelMaskCache = (size, CIImage(cgImage: cg)) }
+            }
+        }
+        guard let mask = bezelMaskCache?.image,
+              let blend = CIFilter(name: "CIBlendWithMask")
+        else { return image }
+
+        let fitted = image
+            .transformed(by: CGAffineTransform(scaleX: inner.width / size.width, y: inner.height / size.height))
+            .transformed(by: CGAffineTransform(translationX: inner.minX, y: inner.minY))
+        blend.setValue(fitted, forKey: kCIInputImageKey)
+        blend.setValue(CIImage(color: .black).cropped(to: CGRect(origin: .zero, size: size)), forKey: kCIInputBackgroundImageKey)
+        blend.setValue(mask, forKey: kCIInputMaskImageKey)
+        return blend.outputImage ?? image
     }
 
     /// Black pill in stream pixel coordinates (top-left origin → CI bottom-left).

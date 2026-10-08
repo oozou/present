@@ -23,6 +23,10 @@ struct ChromeButton: Identifiable {
 struct DeviceChrome {
     let composite: NSImage
     let mask: NSImage?
+    /// Where the black glass starts, measured from the composite's edge, and
+    /// its corner radius (both in composite points).
+    var glassInset: CGFloat = 0
+    var glassRadius: CGFloat = 0
     let buttons: [ChromeButton]
     /// Composite media-box size in points.
     let compositeSize: CGSize
@@ -51,6 +55,14 @@ struct DeviceChrome {
         return CGRect(
             x: inset / w, y: inset / h,
             width: (w - 2 * inset) / w, height: (h - 2 * inset) / h)
+    }
+
+    /// Corner radius (composite points) for a screen of the given portrait
+    /// aspect so it stays concentric with the frame's glass.
+    func screenCornerRadius(portraitAspect: CGFloat) -> CGFloat {
+        let inset = screenFraction(portraitAspect: portraitAspect).minX * compositeSize.width
+        guard glassRadius > 0 else { return 0.12 * compositeSize.width * 0.9 }
+        return max(0, glassRadius - (inset - glassInset))
     }
 
     // MARK: - Loading
@@ -114,9 +126,43 @@ struct DeviceChrome {
         let (buttons, padding) = loadButtons(
             resources: resources, compositeSize: composite.size)
         Log.write("chrome: loaded \(shortName) for \(modelIdentifier) (mask: \(mask != nil), buttons: \(buttons.count))")
-        return DeviceChrome(
+        var chrome = DeviceChrome(
             composite: composite, mask: mask, buttons: buttons,
             compositeSize: composite.size, padding: padding)
+        (chrome.glassInset, chrome.glassRadius) = measureGlass(composite)
+        return chrome
+    }
+
+    /// Finds the black glass region's edge and corner radius in the artwork.
+    /// The frame's inner opening isn't the same shape as every phone's screen
+    /// mask, so the screen's corners are derived from this to stay concentric.
+    private static func measureGlass(_ composite: NSImage) -> (inset: CGFloat, radius: CGFloat) {
+        let scale = 4
+        let w = Int(composite.size.width) * scale, h = Int(composite.size.height) * scale
+        guard let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let gc = NSGraphicsContext(bitmapImageRep: rep)
+        else { return (0, 0) }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = gc
+        composite.draw(in: NSRect(x: 0, y: 0, width: w, height: h))
+        NSGraphicsContext.restoreGraphicsState()
+
+        func isGlass(_ x: Int, _ y: Int) -> Bool {
+            guard let c = rep.colorAt(x: x, y: y) else { return false }
+            return c.alphaComponent > 0.5 && c.redComponent < 0.06
+        }
+        var x0 = 0
+        while x0 < w / 2, !isGlass(x0, h / 2) { x0 += 1 }
+        var y0 = 0
+        while y0 < h / 2, !isGlass(w / 2, y0) { y0 += 1 }
+        var d = 0
+        while d < w / 2, !isGlass(x0 + d, y0 + d) { d += 1 }
+        // On a circular corner the 45° point sits R(1 - 1/√2) from each edge.
+        let radius = CGFloat(d) / 0.2929 / CGFloat(scale)
+        return (CGFloat(x0) / CGFloat(scale), radius)
     }
 
     private static func loadButtons(
@@ -297,6 +343,7 @@ extension DeviceChrome {
         }
         return DeviceChrome(
             composite: tint(composite), mask: mask,
+            glassInset: glassInset, glassRadius: glassRadius,
             buttons: buttons.map {
                 ChromeButton(
                     id: $0.id, image: tint($0.image), imageDown: $0.imageDown.map(tint),
