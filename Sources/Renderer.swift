@@ -10,6 +10,7 @@ struct SceneSpec {
     let showBezel: Bool
     let backgroundPresetID: Int
     let backgroundImagePath: String
+    let backgroundColorHex: String
 }
 
 struct SceneGeometry {
@@ -210,6 +211,12 @@ final class SceneRenderer {
     }
 
     private static func drawBackground(spec: SceneSpec, canvas: CGSize, in ctx: CGContext) {
+        if spec.backgroundPresetID == BackgroundSelection.customColor,
+           let color = BackgroundColor.nsColor(hex: spec.backgroundColorHex) {
+            ctx.setFillColor(color.cgColor)
+            ctx.fill(CGRect(origin: .zero, size: canvas))
+            return
+        }
         if spec.backgroundPresetID == -1,
            let nsImage = NSImage(contentsOfFile: spec.backgroundImagePath),
            nsImage.size.width > 0 {

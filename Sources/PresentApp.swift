@@ -12,6 +12,10 @@ struct PresentApp: App {
                 .background(WindowConfigurator())
         }
         .windowStyle(.hiddenTitleBar)
+
+        Settings {
+            SettingsView()
+        }
     }
 }
 

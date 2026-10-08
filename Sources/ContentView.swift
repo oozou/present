@@ -1,11 +1,11 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject private var capture: CaptureController
 
     @AppStorage("backgroundPreset") private var backgroundPreset = 0
     @AppStorage("backgroundImagePath") private var backgroundImagePath = ""
+    @AppStorage("backgroundColorHex") private var backgroundColorHex = ""
     @AppStorage("showBezel") private var showBezel = true
     @AppStorage("frameMode") private var frameMode = "photoreal" // photoreal | drawn
     @AppStorage("modelOverride") private var modelOverride = "" // "" = auto
@@ -24,7 +24,9 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
-                BackgroundView(presetID: backgroundPreset, imagePath: backgroundImagePath)
+                BackgroundView(
+                    presetID: backgroundPreset, imagePath: backgroundImagePath,
+                    colorHex: backgroundColorHex)
 
                 PhoneView(
                     showBezel: showBezel,
@@ -43,8 +45,6 @@ struct ContentView: View {
                     ToastView(media: capture.media)
                     ControlBar(
                         media: capture.media,
-                        backgroundPreset: $backgroundPreset,
-                        backgroundImagePath: $backgroundImagePath,
                         showBezel: $showBezel,
                         frameMode: $frameMode,
                         modelOverride: $modelOverride,
@@ -141,7 +141,8 @@ struct ContentView: View {
             fallbackStyle: inferred.bezel,
             showBezel: showBezel,
             backgroundPresetID: backgroundPreset,
-            backgroundImagePath: backgroundImagePath)
+            backgroundImagePath: backgroundImagePath,
+            backgroundColorHex: backgroundColorHex)
     }
 }
 
@@ -164,8 +165,6 @@ private struct ControlBar: View {
     @EnvironmentObject private var capture: CaptureController
     @ObservedObject var media: MediaExporter
 
-    @Binding var backgroundPreset: Int
-    @Binding var backgroundImagePath: String
     @Binding var showBezel: Bool
     @Binding var frameMode: String
     @Binding var modelOverride: String
@@ -173,7 +172,6 @@ private struct ControlBar: View {
     let makeSpec: () -> SceneSpec?
     let triggerFlash: () -> Void
 
-    @State private var showingImagePicker = false
     @AppStorage("islandMode") private var islandMode = "auto"
 
     var body: some View {
@@ -249,51 +247,16 @@ private struct ControlBar: View {
 
             Divider().frame(height: 18)
 
-            ForEach(BackgroundPreset.all) { preset in
-                Button {
-                    backgroundPreset = preset.id
-                } label: {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: preset.colors,
-                                startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .overlay(
-                            Circle().strokeBorder(
-                                backgroundPreset == preset.id ? Color.white : Color.white.opacity(0.25),
-                                lineWidth: backgroundPreset == preset.id ? 2 : 1))
-                        .frame(width: 18, height: 18)
-                }
-                .buttonStyle(.plain)
-                .help(preset.name)
-            }
-
-            Button {
-                showingImagePicker = true
-            } label: {
-                Image(systemName: "photo")
-                    .overlay(alignment: .bottomTrailing) {
-                        if backgroundPreset == -1 {
-                            Circle().fill(.white).frame(width: 5, height: 5).offset(x: 3, y: 3)
-                        }
-                    }
+            SettingsLink {
+                Image(systemName: "photo.on.rectangle.angled")
             }
             .buttonStyle(.plain)
-            .help("Use an image as background")
+            .help("Backgrounds and settings (⌘,)")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .background(.ultraThinMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
-        .fileImporter(
-            isPresented: $showingImagePicker,
-            allowedContentTypes: [.image]
-        ) { result in
-            if case .success(let url) = result {
-                backgroundImagePath = url.path
-                backgroundPreset = -1
-            }
-        }
     }
 
     private func takeScreenshot() {
