@@ -1,26 +1,38 @@
 import SwiftUI
 import AVFoundation
 
-/// Hosts an AVCaptureVideoPreviewLayer — the lowest-latency path for showing
-/// a capture stream (frames go straight from the session to the compositor).
+/// Hosts the AVSampleBufferDisplayLayer that CaptureController feeds with
+/// retimed, display-immediately frames (lower latency than
+/// AVCaptureVideoPreviewLayer for iPhone screen capture).
 struct PreviewView: NSViewRepresentable {
-    let session: AVCaptureSession
+    let layer: AVSampleBufferDisplayLayer
 
     func makeNSView(context: Context) -> PreviewNSView {
-        PreviewNSView(session: session)
+        PreviewNSView(displayLayer: layer)
     }
 
     func updateNSView(_ nsView: PreviewNSView, context: Context) {}
 }
 
 final class PreviewNSView: NSView {
-    init(session: AVCaptureSession) {
+    private let displayLayer: AVSampleBufferDisplayLayer
+
+    init(displayLayer: AVSampleBufferDisplayLayer) {
+        self.displayLayer = displayLayer
         super.init(frame: .zero)
         wantsLayer = true
-        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.videoGravity = .resizeAspectFill
-        previewLayer.backgroundColor = NSColor.black.cgColor
-        layer = previewLayer
+        layer?.backgroundColor = NSColor.black.cgColor
+        displayLayer.videoGravity = .resizeAspectFill
+        displayLayer.backgroundColor = NSColor.black.cgColor
+        layer?.addSublayer(displayLayer)
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        displayLayer.frame = bounds
+        CATransaction.commit()
     }
 
     /// Without this the layer renders at 1x on Retina displays and the
@@ -29,6 +41,7 @@ final class PreviewNSView: NSView {
         super.viewDidChangeBackingProperties()
         if let scale = window?.backingScaleFactor {
             layer?.contentsScale = scale
+            displayLayer.contentsScale = scale
         }
     }
 

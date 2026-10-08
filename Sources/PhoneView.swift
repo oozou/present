@@ -152,7 +152,7 @@ struct PhoneView: View {
     @ViewBuilder
     private var screen: some View {
         if capture.isStreaming {
-            PreviewView(session: capture.session)
+            PreviewView(layer: capture.displayLayer)
                 .overlay(islandOverlay)
         } else {
             placeholder

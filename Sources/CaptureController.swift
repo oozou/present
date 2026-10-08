@@ -24,6 +24,10 @@ final class CaptureController: NSObject, ObservableObject {
 
     let session = AVCaptureSession()
     let media = MediaExporter()
+    /// Live preview. Frames from the video tap are retimed to "now" and shown
+    /// immediately; AVCaptureVideoPreviewLayer adds noticeable lag on iPhone
+    /// screen devices (it syncs to the session clock).
+    nonisolated(unsafe) let displayLayer = AVSampleBufferDisplayLayer()
 
     private var device: AVCaptureDevice?
     private var formatObservation: NSKeyValueObservation?
@@ -46,6 +50,7 @@ final class CaptureController: NSObject, ObservableObject {
     /// only does while the island is active — idle mirrors omit it, so the
     /// app fills in a black pill). Sampled from incoming frames.
     @Published private(set) var streamShowsIsland = false
+    nonisolated(unsafe) private var loggedFormat = false
     nonisolated(unsafe) private var _islandInStream = false
     nonisolated(unsafe) private var pendingIslandResult: (value: Bool, streak: Int) = (false, 0)
     nonisolated var islandOverlayNeededNow: Bool {
@@ -216,11 +221,11 @@ final class CaptureController: NSObject, ObservableObject {
             } catch {
                 failure = "AVCaptureDeviceInput failed: \(error.localizedDescription)"
             }
-            // Frame tap for screenshots/recording; BGRA for direct CoreImage use.
+            // Frame tap for screenshots/recording/island detection. Deliberately
+            // no videoSettings: requesting BGRA forces a per-frame conversion in
+            // the capture pipeline, adding latency to the preview. CoreImage
+            // and the island scan both accept the device's native format.
             if session.outputs.isEmpty {
-                videoOutput.videoSettings = [
-                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                ]
                 videoOutput.alwaysDiscardsLateVideoFrames = true
                 videoOutput.setSampleBufferDelegate(self, queue: frameQueue)
                 if session.canAddOutput(videoOutput) {
@@ -282,7 +287,38 @@ extension CaptureController: AVCaptureVideoDataOutputSampleBufferDelegate {
             // free, and per-frame detection keeps the overlay handoff seamless.
             analyzeIslandRegion(buffer)
         }
+        display(sampleBuffer)
         media.ingest(sampleBuffer)
+    }
+
+    /// Re-stamps the frame with the current host time and tells the layer to
+    /// show it immediately, bypassing its timebase scheduling.
+    private nonisolated func display(_ sampleBuffer: CMSampleBuffer) {
+        var timing = CMSampleTimingInfo(
+            duration: .invalid,
+            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            decodeTimeStamp: .invalid)
+        var retimed: CMSampleBuffer?
+        CMSampleBufferCreateCopyWithNewTiming(
+            allocator: nil, sampleBuffer: sampleBuffer,
+            sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+            sampleBufferOut: &retimed)
+        guard let retimed else { return }
+
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(
+            retimed, createIfNecessary: true) as? [NSMutableDictionary] {
+            attachments.first?[kCMSampleAttachmentKey_DisplayImmediately] = true
+        }
+
+        if displayLayer.status == .failed { displayLayer.flush() }
+        if displayLayer.isReadyForMoreMediaData {
+            displayLayer.enqueue(retimed)
+        }
+    }
+
+    private nonisolated static func fourCC(_ code: OSType) -> String {
+        let bytes = [24, 16, 8, 0].map { UInt8((code >> UInt32($0)) & 0xFF) }
+        return String(bytes: bytes, encoding: .ascii) ?? String(code)
     }
 
     /// Checks whether the island region of the frame is predominantly black
@@ -295,21 +331,56 @@ extension CaptureController: AVCaptureVideoDataOutputSampleBufferDelegate {
               let island = DynamicIsland.rect(streamSize: CGSize(width: w, height: h))
         else { return }
 
+        let format = CVPixelBufferGetPixelFormatType(buffer)
+        if !loggedFormat {
+            loggedFormat = true
+            Log.write("frame tap pixel format: \(Self.fourCC(format)) \(w)x\(h)")
+        }
+
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return }
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+
+        // Locate pixels without assuming a format: planar YUV → luma plane,
+        // packed 4:2:2 → luma bytes, BGRA → all three channels.
+        let base: UnsafeMutableRawPointer?
+        let bytesPerRow: Int
+        let bytesPerPixel: Int
+        switch format {
+        case kCVPixelFormatType_32BGRA:
+            base = CVPixelBufferGetBaseAddress(buffer)
+            bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+            bytesPerPixel = 4
+        case kCVPixelFormatType_422YpCbCr8, kCVPixelFormatType_422YpCbCr8_yuvs:
+            // 2vuy = Cb Y Cr Y, yuvs = Y Cb Y Cr
+            base = CVPixelBufferGetBaseAddress(buffer).map {
+                format == kCVPixelFormatType_422YpCbCr8 ? $0 + 1 : $0
+            }
+            bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+            bytesPerPixel = 2
+        default:
+            guard CVPixelBufferIsPlanar(buffer) else { return }
+            base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0)
+            bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+            bytesPerPixel = 1
+        }
+        guard let base else { return }
         let ptr = base.assumingMemoryBound(to: UInt8.self)
+        let isBGRA = format == kCVPixelFormatType_32BGRA
 
         // Sample the pill's core (inset to avoid anti-aliased edges).
+        // Luma threshold is looser than the BGRA one: video-range black is 16.
         let core = island.insetBy(dx: island.width * 0.15, dy: island.height * 0.15)
         var dark = 0, total = 0
         var y = Int(core.minY)
         while y < Int(core.maxY) {
             var x = Int(core.minX)
             while x < Int(core.maxX) {
-                let p = ptr + y * bytesPerRow + x * 4 // BGRA
-                if p[0] < 30, p[1] < 30, p[2] < 30 { dark += 1 }
+                let p = ptr + y * bytesPerRow + x * bytesPerPixel
+                if isBGRA {
+                    if p[0] < 30, p[1] < 30, p[2] < 30 { dark += 1 }
+                } else if p[0] < 34 {
+                    dark += 1
+                }
                 total += 1
                 x += 8
             }
